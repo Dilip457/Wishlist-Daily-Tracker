@@ -1,20 +1,34 @@
 # 📊 Wishlist Stock Daily Tracker
 
-An automated daily alert system that monitors **sector-wise wishlist stocks** from NSE India and sends a formatted infographic image to a **Telegram group/channel** every weekday after market close.
+An automated daily alert system that monitors **sector-wise wishlist stocks** from NSE India and sends a single **multi-page PDF report** to a **Telegram group/channel** every weekday after market close.
 
-Data is sourced directly from **NSE India's official API** — the same numbers shown on [nseindia.com](https://www.nseindia.com).
+Data is sourced from **Yahoo Finance** (`.NS` symbols, same numbers as nseindia.com) with layered fallbacks so a single flaky API never breaks the daily alert.
 
 ---
 
 ## 💡 What It Does
 
-Every weekday at **4:30 PM IST** (after NSE market close), the tracker:
+Every weekday at **6:00 PM IST** (after NSE market close), the tracker:
 
-1. Fetches live data for all 27 wishlist stocks from NSE India
+1. Fetches live data for all 27 wishlist stocks
 2. Calculates **% below 52-week high** for each stock (the "dip" signal)
 3. Detects if any stock hit a **new 52W high or low** today
-4. Generates a **sector-wise infographic PNG** with color-coded dip signals
-5. Sends the image to your **Telegram group/channel**
+4. Builds **one multi-page PDF report** — summary page (dip distribution, data health, new 52W flags) + sector-wise tables with color-coded dip signals
+5. Sends the PDF to your **Telegram group/channel** via `sendDocument` (far easier to read than multiple images)
+
+---
+
+## 🛡 Reliability Design
+
+| Layer | What it does |
+|---|---|
+| **Primary provider** | `yfinance` via `ticker.history(period="1y")` — works on yfinance 0.2.x and 1.x (`fast_info` was removed in 1.x and silently broke the old build) |
+| **Retry + backoff** | Every symbol retried up to 3× (1s/2s backoff) — Yahoo's "possibly delisted" error is usually rate limiting |
+| **Fallback provider** | Direct Yahoo v8 chart REST API — independent of the yfinance library, so a new yfinance release can't break the pipeline |
+| **Cache** | `data/cache.json` stores the last good value per symbol; if a stock is temporarily unfetchable, the report shows its last known price marked `[CACHED]` |
+| **Safe cache commit** | The workflow rebases before pushing, so concurrent runs never wedge the cache commit |
+
+The report's caption always shows **Live X/27**, so you know at a glance whether today's numbers are fresh.
 
 ---
 
@@ -47,28 +61,6 @@ Every weekday at **4:30 PM IST** (after NSE market close), the tracker:
 
 ---
 
-## 📱 Sample Infographic
-
-The daily image shows for each stock:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│              WISHLIST STOCK TRACKER                                              │
-│   Sector-wise  |  52W High / Low Analysis  |  Daily Dip Monitor                 │
-│                    25 Sep 2026  |  04:30 PM IST                                  │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ ⚡ POWER SECTOR                                                      2 stocks    │
-├──────────────┬────────────┬────────────┬────────────┬────────────┬──────────────┤
-│ STOCK        │ PRICE      │ 52W HIGH   │ % FROM HIGH│ 52W LOW    │ DAY CHG%     │
-├──────────────┼────────────┼────────────┼────────────┼────────────┼──────────────┤
-│ TATAPOWER    │ Rs.412.50  │ Rs.500.00  │ -17.50%    │ Rs.350.00  │ +1.20%       │
-│ Tata Power   │            │            │ DEEP DIP   │+17.9% low  │ H:415 L:408  │
-├──────────────┼────────────┼────────────┼────────────┼────────────┼──────────────┤
-│ CGPOWER      │ Rs.650.00  │ Rs.800.00  │ -18.75%    │ Rs.500.00  │ -0.50%       │
-│ CG Power     │            │            │ DEEP DIP   │+30.0% low  │ H:655 L:645  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
 ### Color Coding
 
 | Color | Signal | Meaning |
@@ -81,10 +73,10 @@ The daily image shows for each stock:
 
 ### Special Flags
 
-- **NEW 52W HIGH** (gold badge) — Stock hit a new 52-week high today
-- **NEW 52W LOW** (red badge) — Stock hit a new 52-week low today
-- **[EXITING]** (red text) — Stock marked for exit from watchlist
-- **[highly valued]** (yellow text) — Stock noted as richly valued
+- **NEW 52W HIGH** (gold) — Stock hit a new 52-week high today
+- **NEW 52W LOW** (red) — Stock hit a new 52-week low today
+- **[CACHED]** (yellow) — Live fetch failed; last known price shown
+- **[EXITING]** / **[highly valued]** — manual notes from the watchlist
 
 ---
 
@@ -93,69 +85,54 @@ The daily image shows for each stock:
 ### Step 1 — Create a Telegram Group/Channel for Wishlist Alerts
 
 1. Open Telegram → **New Group** (or **New Channel**)
-2. Name it (e.g. `Wishlist Stock Alerts` or `My Stock Watchlist`)
-3. Add your bot as **Admin**:
-   - Open the group/channel → Settings → Administrators → Add Administrator
-   - Search your bot → add it → enable **"Post Messages"** → Done
-4. Get the group/channel ID:
-   - Forward any message from the group to **@userinfobot**
-   - It replies with the chat ID (e.g. `-1001234567890`)
+2. Name it (e.g. `Wishlist Stock Alerts`)
+3. Add your bot as **Admin** (enable **"Post Messages"**)
+4. Get the group/channel ID by forwarding a message from it to **@userinfobot**
 
-> If you already have a bot from the main market alert setup, you can reuse the same bot.
-
----
-
-### Step 2 — Add GitHub Secret
+### Step 2 — Add GitHub Secrets
 
 Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**
 
-| Secret Name | Value | Notes |
-|---|---|---|
-| `WISHLIST_TELEGRAM_CHAT_IDS` | Your group/channel ID(s) | e.g. `-1001234567890` |
-| `TELEGRAM_BOT_TOKEN` | Your bot token | Same as main alert (already set) |
+| Secret Name | Value |
+|---|---|
+| `WISHLIST_TELEGRAM_CHAT_IDS` | e.g. `-1001234567890` (comma-separate for multiple) |
+| `TELEGRAM_BOT_TOKEN` | Your bot token |
 
-For multiple recipients, separate with commas:
-```
--1001234567890,-1009876543210,@my_channel
-```
-
-> **Tip:** If `WISHLIST_TELEGRAM_CHAT_IDS` is not set, the script automatically falls back to `TELEGRAM_CHAT_IDS` — so you can send both alerts to the same chat.
-
----
+> If `WISHLIST_TELEGRAM_CHAT_IDS` is not set, the script falls back to `TELEGRAM_CHAT_IDS`.
 
 ### Step 3 — Test It
 
-1. Go to your repo → **Actions** tab
-2. Click **Daily Wishlist Stock Tracker** → **Run workflow** → **Run workflow**
-3. Wait ~60 seconds (fetches 27 stocks) → check Telegram
+1. Repo → **Actions** tab → **Daily Wishlist Stock Tracker** → **Run workflow**
+2. Wait ~2 minutes → check Telegram for the PDF
 
 ---
 
 ## ⚙️ How It Works
 
 ```
-GitHub Actions (cron: Mon–Fri 4:30 PM IST)
+GitHub Actions (cron: Mon–Fri 6:00 PM IST = 12:30 UTC)
       │
       ▼
 wishlist_tracker.py runs
       │
-      ├─→ Builds NSE session (cookies for API access)
+      ├─→ Fetches each symbol (3 layers):
+      │     1. yfinance  (retry ×3, backoff)
+      │     2. Yahoo v8 chart REST API (fallback)
+      │     3. data/cache.json (last good value)
       │
-      ├─→ Fetches quote-equity API for each unique symbol
-      │         Returns: lastPrice, weekHighLow (52W H/L),
-      │                  intraDayHighLow (day H/L), pChange
+      ├─→ Calculates per stock:
+      │     • % below 52W high  (dip signal)
+      │     • % above 52W low   (recovery signal)
+      │     • New 52W high/low detection
       │
-      ├─→ Calculates for each stock:
-      │         • % below 52W high  (dip signal)
-      │         • % above 52W low   (recovery signal)
-      │         • New 52W high/low detection
+      ├─→ Builds ONE multi-page PDF (reportlab):
+      │     • Page 1: summary — live/cached counts, dip
+      │       distribution with symbol lists, new 52W flags
+      │     • Sector tables: price, day change, 52W range,
+      │       % from high with dip label, day H/L, flags
       │
-      ├─→ Builds sector-wise PNG infographic (900px wide)
-      │         • Dark theme, color-coded dip signals
-      │         • Sector headers with accent colors
-      │         • NEW 52W HIGH/LOW badges
-      │
-      └─→ Sends PNG to Telegram group/channel
+      └─→ Sends PDF to Telegram (sendDocument)
+          (plain-text message as automatic fallback)
 ```
 
 ---
@@ -174,41 +151,18 @@ Edit `WISHLIST_SECTORS` in `wishlist_tracker.py`:
         {"symbol": "RELIANCE",  "name": "Reliance Industries"},
         {"symbol": "HDFCBANK",  "name": "HDFC Bank", "note": "watching"},
     ],
-},
+}
 ```
 
-### Find the Correct NSE Symbol
-
-The `symbol` must match NSE's exact equity symbol. To verify:
-1. Go to [nseindia.com](https://www.nseindia.com)
-2. Search for the stock
-3. The URL will show: `nseindia.com/get-quotes/equity?symbol=RELIANCE`
-4. Use that exact symbol string
-
-### Common NSE Symbols Reference
-
-| Company | NSE Symbol |
-|---|---|
-| Reliance Industries | `RELIANCE` |
-| HDFC Bank | `HDFCBANK` |
-| Infosys | `INFY` |
-| TCS | `TCS` |
-| Tata Motors | `TATAMOTORS` |
-| Wipro | `WIPRO` |
-| Adani Enterprises | `ADANIENT` |
-| Bajaj Finance | `BAJFINANCE` |
-| Asian Paints | `ASIANPAINT` |
-| Titan Company | `TITAN` |
+Use the exact NSE symbol (check the URL on nseindia.com: `...?symbol=RELIANCE`).
 
 ### Change the Schedule
 
-Edit the cron in `.github/workflows/wishlist_tracker.yml`:
+Edit the cron in `.github/workflows/daily_alert.yml`:
 
 ```yaml
-- cron: '00 11 * * 1-5'   # 4:30 PM IST = 11:00 AM UTC
+- cron: '30 12 * * 1-5'   # 6:00 PM IST = 12:30 PM UTC
 ```
-
-Use [crontab.guru](https://crontab.guru) to calculate UTC times.
 
 ---
 
@@ -217,8 +171,8 @@ Use [crontab.guru](https://crontab.guru) to calculate UTC times.
 | Event | Time |
 |---|---|
 | NSE market closes | 3:30 PM IST |
-| Wishlist tracker runs | 4:30 PM IST (Mon–Fri) |
-| GitHub Actions cron | `00 11 * * 1-5` (UTC) |
+| Wishlist tracker runs | 6:00 PM IST (Mon–Fri) |
+| GitHub Actions cron | `30 12 * * 1-5` (UTC) |
 
 ---
 
@@ -226,24 +180,11 @@ Use [crontab.guru](https://crontab.guru) to calculate UTC times.
 
 | Issue | Likely Cause | Fix |
 |---|---|---|
-| Stock shows "DATA UNAVAILABLE" | Wrong NSE symbol | Verify symbol on nseindia.com |
-| No image received | Pillow not installed | Check GitHub Actions logs |
-| NSE connection failed | NSE blocked GitHub IP | Re-run workflow; usually resolves |
-| Bot can't post to group | Bot not admin | Add bot as admin with Post Messages |
-| `WISHLIST_TELEGRAM_CHAT_IDS` not set | Secret missing | Add secret or it falls back to `TELEGRAM_CHAT_IDS` |
-
----
-
-## 📁 File Structure
-
-```
-Wishlist_Daily_Tracker/
-├── wishlist_tracker.py     ← Main script
-└── README.md               ← This file
-
-.github/workflows/
-└── wishlist_tracker.yml    ← GitHub Actions schedule
-```
+| Stock shows "DATA UNAVAILABLE" | Yahoo throttling or bad symbol | Run `python test_tracker.py` to verify; check symbol on nseindia.com |
+| Prices show "[CACHED]" | Live fetch failed, cache used | Usually transient; if persistent, check Actions logs |
+| No PDF received | reportlab missing | Check `pip install -r requirements.txt` in Actions logs |
+| Bot can't post | Bot not admin | Add bot as admin with Post Messages |
+| Cache commit fails | Concurrent run pushed first | Already handled via rebase; just re-run |
 
 ---
 
@@ -251,10 +192,10 @@ Wishlist_Daily_Tracker/
 
 | Component | Tool | Cost |
 |---|---|---|
-| Data source | NSE India official API | Free |
+| Data source | Yahoo Finance (yfinance + direct REST fallback) | Free |
 | Notifications | Telegram Bot API | Free |
 | Scheduling & hosting | GitHub Actions | Free |
-| Image generation | Pillow (PIL) | Free |
+| PDF generation | reportlab | Free |
 | Language | Python 3.11 | Free |
 
 **Total cost: ₹0/month**
