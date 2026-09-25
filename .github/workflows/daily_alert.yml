@@ -51,7 +51,7 @@ jobs:
           fi
           git commit -m "chore: update stock data cache $(date -u '+%Y-%m-%d') [skip ci]"
           # Rebase on any concurrent change so the push never gets stuck.
-          git pull --rebase=autostash origin "${GITHUB_REF_NAME:-main}"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}"
           git push
 
   # ── Keep-alive: prevents GitHub disabling the schedule after 60 days ───────
@@ -67,5 +67,5 @@ jobs:
           echo "$(date -u)" > .github/keep_alive.txt
           git add .github/keep_alive.txt
           git diff --staged --quiet || git commit -m "chore: keep workflow alive [skip ci]"
-          git pull --rebase=autostash origin "${GITHUB_REF_NAME:-main}"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}"
           git push
