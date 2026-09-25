@@ -215,21 +215,19 @@ NSE_EQUITY_INDICES = [
 ]
 
 # ── NSE Request Headers ───────────────────────────────────────────────────────
+# Keep identical to the working market_alert.py — do NOT add Sec-Fetch-* or
+# X-Requested-With here; those are browser-internal headers that NSE uses to
+# distinguish page loads from XHR calls. Setting them on page visits causes
+# NSE to return an empty body, breaking cookie setup.
 NSE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept":           "application/json, text/plain, */*",
-    "Accept-Language":  "en-US,en;q=0.9",
-    "Accept-Encoding":  "gzip, deflate, br",
-    "Connection":       "keep-alive",
-    "X-Requested-With": "XMLHttpRequest",
-    "Sec-Fetch-Dest":   "empty",
-    "Sec-Fetch-Mode":   "cors",
-    "Sec-Fetch-Site":   "same-origin",
-    "Referer":          "https://www.nseindia.com/",
+    "Accept":          "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer":         "https://www.nseindia.com/",
 }
 
 MAX_RETRIES  = 3
@@ -362,36 +360,29 @@ def _day_color(pct):
 
 # ── NSE Session ───────────────────────────────────────────────────────────────
 def build_nse_session() -> requests.Session:
+    """
+    Identical session-building strategy to the working market_alert.py:
+      1. Visit homepage  (sets initial cookies)
+      2. Visit equity market page  (sets cookies for equity-stockIndices)
+    No warm-up API call — that caused empty-body failures.
+    """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             session = requests.Session()
             session.headers.update(NSE_HEADERS)
 
-            # 1. Homepage — sets initial cookies
-            print(f"  [Attempt {attempt}] Visiting NSE homepage...")
-            session.headers.update({"Referer": "https://www.nseindia.com/"})
+            print(f"  [Attempt {attempt}] Visiting NSE homepage for cookies...")
             session.get("https://www.nseindia.com", timeout=TIMEOUT_HOME)
             time.sleep(3)
 
-            # 2. Equity market page — sets cookies needed for equity-stockIndices
             print(f"  [Attempt {attempt}] Visiting equity market page...")
-            session.headers.update({"Referer": "https://www.nseindia.com/"})
+            session.headers.update(
+                {"Referer": "https://www.nseindia.com/"}
+            )
             session.get(
                 "https://www.nseindia.com/market-data/live-equity-market",
                 timeout=TIMEOUT_HOME,
             )
-            time.sleep(3)
-
-            # 3. Warm-up: call allIndices (known to work) to validate session
-            print(f"  [Attempt {attempt}] Warming up session with allIndices...")
-            session.headers.update(
-                {"Referer": "https://www.nseindia.com/market-data/live-equity-market"}
-            )
-            r = session.get(
-                "https://www.nseindia.com/api/allIndices", timeout=TIMEOUT_API
-            )
-            r.raise_for_status()
-            print(f"  Session warm-up OK (allIndices returned {len(r.json().get('data',[]))} indices)")
             time.sleep(2)
 
             return session
@@ -419,7 +410,8 @@ def fetch_equity_index(session: requests.Session, index_name: str) -> list:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            # Step A: visit the index page to set cookies & Referer
+            # Step A: visit the specific index page — this sets the cookies
+            # and Referer that NSE requires for equity-stockIndices.
             print(f"    [Attempt {attempt}] Visiting index page: {index_name}...")
             session.headers.update(
                 {"Referer": "https://www.nseindia.com/market-data/live-equity-market"}
@@ -427,13 +419,20 @@ def fetch_equity_index(session: requests.Session, index_name: str) -> list:
             session.get(page_url, timeout=TIMEOUT_HOME)
             time.sleep(2)
 
-            # Step B: call the API with the index page as Referer
+            # Step B: call the API — Referer must be the index page URL
             print(f"    [Attempt {attempt}] Calling equity-stockIndices: {index_name}...")
             session.headers.update({"Referer": page_url})
             resp = session.get(api_url, timeout=TIMEOUT_API)
+
+            # Log status for debugging
+            print(f"    HTTP {resp.status_code}  body_len={len(resp.content)} bytes")
             resp.raise_for_status()
+
+            if not resp.content:
+                raise ValueError(f"Empty response body for {index_name}")
+
             data = resp.json().get("data", [])
-            # First row is the index summary — skip it
+            # First row is the index summary row — skip it
             stocks = [
                 d for d in data
                 if d.get("symbol") and d.get("symbol") not in (index_name, "")
