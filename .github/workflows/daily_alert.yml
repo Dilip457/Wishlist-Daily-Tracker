@@ -1,0 +1,48 @@
+name: Daily Wishlist Stock Tracker
+
+on:
+  schedule:
+    # 6:00 PM IST = 12:30 PM UTC  (Mon–Fri, after NSE market close)
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch:   # allow manual trigger from Actions tab
+
+jobs:
+  send-wishlist-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system fonts (for infographic rendering)
+        run: sudo apt-get install -y fonts-dejavu-core fonts-liberation
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run wishlist stock tracker
+        env:
+          TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WISHLIST_TELEGRAM_CHAT_IDS: ${{ secrets.WISHLIST_TELEGRAM_CHAT_IDS }}
+        run: python wishlist_tracker.py
+
+  # ── Keep-alive: prevents GitHub disabling the schedule after 60 days ───────
+  keep-alive:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep workflow alive
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "$(date -u)" > .github/keep_alive.txt
+          git add .github/keep_alive.txt
+          git diff --staged --quiet || git commit -m "chore: keep workflow alive [skip ci]"
+          git push || true
