@@ -221,9 +221,15 @@ NSE_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer":         "https://www.nseindia.com/",
+    "Accept":           "application/json, text/plain, */*",
+    "Accept-Language":  "en-US,en;q=0.9",
+    "Accept-Encoding":  "gzip, deflate, br",
+    "Connection":       "keep-alive",
+    "X-Requested-With": "XMLHttpRequest",
+    "Sec-Fetch-Dest":   "empty",
+    "Sec-Fetch-Mode":   "cors",
+    "Sec-Fetch-Site":   "same-origin",
+    "Referer":          "https://www.nseindia.com/",
 }
 
 MAX_RETRIES  = 3
@@ -360,15 +366,34 @@ def build_nse_session() -> requests.Session:
         try:
             session = requests.Session()
             session.headers.update(NSE_HEADERS)
-            print(f"  [Attempt {attempt}] Visiting NSE homepage for cookies...")
+
+            # 1. Homepage — sets initial cookies
+            print(f"  [Attempt {attempt}] Visiting NSE homepage...")
+            session.headers.update({"Referer": "https://www.nseindia.com/"})
             session.get("https://www.nseindia.com", timeout=TIMEOUT_HOME)
             time.sleep(3)
+
+            # 2. Equity market page — sets cookies needed for equity-stockIndices
             print(f"  [Attempt {attempt}] Visiting equity market page...")
+            session.headers.update({"Referer": "https://www.nseindia.com/"})
             session.get(
                 "https://www.nseindia.com/market-data/live-equity-market",
                 timeout=TIMEOUT_HOME,
             )
+            time.sleep(3)
+
+            # 3. Warm-up: call allIndices (known to work) to validate session
+            print(f"  [Attempt {attempt}] Warming up session with allIndices...")
+            session.headers.update(
+                {"Referer": "https://www.nseindia.com/market-data/live-equity-market"}
+            )
+            r = session.get(
+                "https://www.nseindia.com/api/allIndices", timeout=TIMEOUT_API
+            )
+            r.raise_for_status()
+            print(f"  Session warm-up OK (allIndices returned {len(r.json().get('data',[]))} indices)")
             time.sleep(2)
+
             return session
         except Exception as e:
             print(f"  WARNING: Session attempt {attempt} failed: {e}")
@@ -382,20 +407,37 @@ def build_nse_session() -> requests.Session:
 def fetch_equity_index(session: requests.Session, index_name: str) -> list:
     """
     Fetch all stocks in an NSE equity index.
-    Uses equity-stockIndices endpoint — same type as allIndices (works from GitHub Actions).
-    Returns list of stock dicts with yearHigh, yearLow, lastPrice, pChange, etc.
+    Strategy:
+      1. Visit the specific index page (sets cookies + correct Referer)
+      2. Call equity-stockIndices API with that Referer
+    Same pattern as allIndices — works from GitHub Actions.
     """
-    encoded = url_quote(index_name)
-    url = f"https://www.nseindia.com/api/equity-stockIndices?index={encoded}"
+    encoded  = url_quote(index_name)
+    page_url = (f"https://www.nseindia.com/market-data/live-equity-market"
+                f"?index={encoded}")
+    api_url  = f"https://www.nseindia.com/api/equity-stockIndices?index={encoded}"
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            print(f"    [Attempt {attempt}] Fetching {index_name}...")
-            resp = session.get(url, timeout=TIMEOUT_API)
+            # Step A: visit the index page to set cookies & Referer
+            print(f"    [Attempt {attempt}] Visiting index page: {index_name}...")
+            session.headers.update(
+                {"Referer": "https://www.nseindia.com/market-data/live-equity-market"}
+            )
+            session.get(page_url, timeout=TIMEOUT_HOME)
+            time.sleep(2)
+
+            # Step B: call the API with the index page as Referer
+            print(f"    [Attempt {attempt}] Calling equity-stockIndices: {index_name}...")
+            session.headers.update({"Referer": page_url})
+            resp = session.get(api_url, timeout=TIMEOUT_API)
             resp.raise_for_status()
             data = resp.json().get("data", [])
-            # Remove the first entry which is the index summary row
-            stocks = [d for d in data if d.get("symbol") and d.get("symbol") != index_name]
+            # First row is the index summary — skip it
+            stocks = [
+                d for d in data
+                if d.get("symbol") and d.get("symbol") not in (index_name, "")
+            ]
             print(f"    OK: {len(stocks)} stocks in {index_name}")
             return stocks
         except Exception as e:
