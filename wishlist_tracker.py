@@ -481,7 +481,7 @@ def fetch_all_quotes(symbols: list[str], cache: dict) -> dict[str, dict]:
     retry_syms = [s for s in symbols if not validate_stock_data(quotes[s])]
     if retry_syms:
         print(f"  Retrying {len(retry_syms)} failed symbol(s) after pause: "
-              f", '.join(retry_syms)")
+              f"{', '.join(retry_syms)}")
         time.sleep(10)
         for sym in retry_syms:
             for provider in providers:
