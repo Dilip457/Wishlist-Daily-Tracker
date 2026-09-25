@@ -560,7 +560,8 @@ COLS = [
 
 _ss = {
     "title":  ParagraphStyle("t",  fontName="Helvetica-Bold", fontSize=20,
-                             textColor=PDF_TEXT, alignment=TA_CENTER, spaceAfter=2),
+                             leading=24, spaceAfter=6,
+                             textColor=PDF_TEXT, alignment=TA_CENTER),
     "sub":    ParagraphStyle("s",  fontName="Helvetica", fontSize=10,
                              textColor=PDF_TEXT_SUB, alignment=TA_CENTER),
     "sect":   ParagraphStyle("se", fontName="Helvetica-Bold", fontSize=11,
