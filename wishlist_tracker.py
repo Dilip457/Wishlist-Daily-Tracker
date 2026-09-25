@@ -545,15 +545,17 @@ PDF_ORANGE     = colors.HexColor("#EA580C")
 PDF_RED        = colors.HexColor("#DC2626")
 PDF_GOLD       = colors.HexColor("#A16207")
 
+# NOTE: column widths must sum to <= 559 (A4 595.28 - 2x18 margins).
+# Current total: 558.
 COLS = [
     ("STOCK",        118, TA_LEFT),
-    ("PRICE",         64, TA_RIGHT),
-    ("DAY CHG",       58, TA_RIGHT),
-    ("52W HIGH",      66, TA_RIGHT),
-    ("% FROM HIGH",   86, TA_RIGHT),
-    ("52W LOW",       66, TA_RIGHT),
-    ("DAY H/L",       84, TA_RIGHT),
-    ("FLAG",          62, TA_RIGHT),
+    ("PRICE (Rs.)",   60, TA_RIGHT),
+    ("DAY CHG",       54, TA_RIGHT),
+    ("52W HIGH",      60, TA_RIGHT),
+    ("% FROM HIGH",   80, TA_RIGHT),
+    ("52W LOW",       60, TA_RIGHT),
+    ("DAY H/L",       60, TA_RIGHT),
+    ("FLAG",          66, TA_RIGHT),
 ]
 
 _ss = {
@@ -606,7 +608,8 @@ def _summary_section(quotes: dict) -> list:
         ("CRASH ZONE (20%+)",          lambda p: abs(p) >= 20, PDF_RED),
     ]
 
-    rows, styles = [], [
+    rows: list = [["DIP BAND", "#", "STOCKS"]]
+    styles = [
         ("BACKGROUND", (0, 0), (-1, 0), PDF_BG_HEADER),
         ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
         ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -620,7 +623,9 @@ def _summary_section(quotes: dict) -> list:
         n = sum(1 for q in valid.values() if match(q["pct_from_high"]))
         syms = ", ".join(sorted(s for s, q in valid.items()
                                 if match(q["pct_from_high"]))) or "—"
-        rows.append([label, str(n), syms])
+        syms_par = Paragraph(syms, ParagraphStyle(
+            "sy", fontName="Helvetica", fontSize=7.5, textColor=PDF_TEXT))
+        rows.append([label, str(n), syms_par])
         styles.append(("TEXTCOLOR", (0, i + 1), (0, i + 1), colr))
         styles.append(("FONTNAME",  (1, i + 1), (1, i + 1), "Helvetica-Bold"))
         styles.append(("FONTSIZE", (0, i + 1), (-1, i + 1), 7.5))
@@ -654,7 +659,7 @@ def _sector_section(sec: dict, quotes: dict) -> list:
     head = Table([[sec["sector"],
                    f"{len(sec['stocks'])} stock"
                    + ("s" if len(sec["stocks"]) > 1 else "")]],
-                 colWidths=[480, 168])
+                 colWidths=[498, 60])
     head.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, -1), accent),
         ("TEXTCOLOR",   (0, 0), (-1, -1), colors.white),
@@ -720,12 +725,12 @@ def _sector_section(sec: dict, quotes: dict) -> list:
 
             row = [
                 Paragraph(stock_html, _ss["cell"]),
-                Paragraph(f"Rs.{q['last_price']:,.2f}", _ss["cellrb"]),
+                Paragraph(f"{q['last_price']:,.2f}", _ss["cellrb"]),
                 Paragraph(f"{pc:+.2f}%", day_style),
                 Paragraph(f"{q['high_52w']:,.2f}", _ss["cellr"]),
                 Paragraph(pct_html, dip_style),
                 Paragraph(f"{q['low_52w']:,.2f}", _ss["cellr"]),
-                Paragraph(f"H {q['day_high']:,.0f} / L {q['day_low']:,.0f}",
+                Paragraph(f"H {q['day_high']:,.0f}<br/>L {q['day_low']:,.0f}",
                           _ss["cellr"]),
                 Paragraph(flag, ParagraphStyle(
                     "f", fontName="Helvetica-Bold", fontSize=7, alignment=TA_RIGHT,
