@@ -1,24 +1,41 @@
 """
 Wishlist Stock Daily Tracker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Data   : NSE India official API  —  equity-stockIndices endpoint
-         (same type as allIndices used in the main market alert — works from
-          GitHub Actions without 403 errors)
-         Fetches NIFTY 500 + NIFTY MICROCAP 250 to cover all wishlist stocks.
-         Returns yearHigh / yearLow / lastPrice / pChange / dayHigh / dayLow.
-Notify : Telegram group / channel  (WISHLIST_TELEGRAM_CHAT_IDS secret)
-Output : 4 sector-group PNG images (~900×900 px each) sent via Telegram.
-         Falls back to plain-text sendMessage if Pillow is not installed.
+Architecture (Phase 1):
+
+  GitHub Actions (cron: Mon–Fri 6 PM IST)
+        ↓
+  YahooFinanceProvider  (yfinance — .NS suffix for NSE stocks)
+        ↓
+  Validation Layer      (price > 0, 52W high > low, etc.)
+        ↓
+  Normalization Layer   (standard StockData dict)
+        ↓
+  Cache Layer           (data/cache.json — committed back to repo)
+        ↓
+  Opportunity Scoring   (% from 52W high, dip label, new 52W flags)
+        ↓
+  Visualization Engine  (4 sector-group PNG images, ~900×900 px each)
+        ↓
+  Telegram Delivery     (sendPhoto to group/channel)
+
+Provider abstraction is in place so Finnhub / AlphaVantage can be
+plugged in later without a major refactor.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import os
+from __future__ import annotations
+
 import io
+import json
+import os
 import time
-import requests
-import pytz
+from abc import ABC, abstractmethod
 from datetime import datetime
-from urllib.parse import quote as url_quote
+
+import pytz
+import requests
+import yfinance as yf
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -27,11 +44,11 @@ except ImportError:
     PIL_AVAILABLE = False
     print("WARNING: Pillow not installed — falling back to text messages.")
 
-# ── Sector-wise Wishlist Configuration ───────────────────────────────────────
-# symbol : Exact NSE equity symbol
-# name   : Human-readable display name
-# note   : Optional tag  ("EXITING", "highly valued", etc.)
-WISHLIST_SECTORS = [
+# ═══════════════════════════════════════════════════════════════════════════════
+# STOCK CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+WISHLIST_SECTORS: list[dict] = [
     {
         "sector": "ALCOHOL & BREWERIES",
         "color":  (255, 180, 50),
@@ -183,9 +200,8 @@ WISHLIST_SECTORS = [
     },
 ]
 
-# ── Sector groups for 4 separate images (5 sectors each) ─────────────────────
-# Each image is ~900×900 px — compact and readable on mobile
-SECTOR_GROUPS = [
+# 4 images × 5 sectors each — compact and readable on mobile
+SECTOR_GROUPS: list[dict] = [
     {
         "part":    "1 / 4",
         "label":   "Beverages | Power | Exchange | Shrimp | Auto",
@@ -208,33 +224,229 @@ SECTOR_GROUPS = [
     },
 ]
 
-# ── NSE indices to fetch (covers all wishlist stocks) ─────────────────────────
-NSE_EQUITY_INDICES = [
-    "NIFTY 500",          # covers ~500 large/mid/small cap stocks
-    "NIFTY MICROCAP 250", # covers micro-cap stocks (MOSCHIP, NETWEB, etc.)
-]
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 1 — PROVIDER ABSTRACTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ── NSE Request Headers ───────────────────────────────────────────────────────
-# Keep identical to the working market_alert.py — do NOT add Sec-Fetch-* or
-# X-Requested-With here; those are browser-internal headers that NSE uses to
-# distinguish page loads from XHR calls. Setting them on page visits causes
-# NSE to return an empty body, breaking cookie setup.
-NSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer":         "https://www.nseindia.com/",
-}
+class MarketDataProvider(ABC):
+    """
+    Abstract base class for market data providers.
+    Implement this interface to add Finnhub, AlphaVantage, etc. in Phase 2.
+    """
 
-MAX_RETRIES  = 3
-TIMEOUT_HOME = 30
-TIMEOUT_API  = 30
+    @abstractmethod
+    def get_stock_data(self, symbol: str) -> dict:
+        """
+        Fetch data for a single NSE symbol.
+        Returns a normalized StockData dict (see _empty_stock_data).
+        """
 
-# ── Image Palette ─────────────────────────────────────────────────────────────
+    def get_all_stocks(self, symbols: list[str]) -> dict[str, dict]:
+        """Fetch data for all symbols. Override for batch-optimized providers."""
+        results: dict[str, dict] = {}
+        for sym in symbols:
+            results[sym] = self.get_stock_data(sym)
+            time.sleep(0.3)   # polite delay
+        return results
+
+
+def _empty_stock_data(symbol: str, error: str) -> dict:
+    """Return a zeroed-out StockData dict with an error message."""
+    return {
+        "symbol":     symbol,
+        "last_price": 0.0,
+        "high_52w":   0.0,
+        "low_52w":    0.0,
+        "day_high":   0.0,
+        "day_low":    0.0,
+        "p_change":   0.0,
+        "prev_close": 0.0,
+        "source":     "error",
+        "timestamp":  datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
+        "error":      error,
+    }
+
+
+class YahooFinanceProvider(MarketDataProvider):
+    """
+    Phase 1 provider — uses yfinance library.
+    NSE stocks are accessed with the .NS suffix (e.g. RADICO.NS).
+    """
+
+    _SUFFIX = ".NS"
+
+    def get_stock_data(self, symbol: str) -> dict:
+        yf_symbol = symbol + self._SUFFIX
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            fi     = ticker.fast_info
+
+            def _f(val) -> float:
+                try:
+                    return float(val) if val is not None else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+
+            last_price  = _f(fi.last_price)
+            high_52w    = _f(fi.fifty_two_week_high)
+            low_52w     = _f(fi.fifty_two_week_low)
+            day_high    = _f(fi.day_high)
+            day_low     = _f(fi.day_low)
+            prev_close  = _f(fi.previous_close)
+
+            p_change = (
+                round((last_price - prev_close) / prev_close * 100, 2)
+                if prev_close else 0.0
+            )
+
+            return {
+                "symbol":     symbol,
+                "last_price": last_price,
+                "high_52w":   high_52w,
+                "low_52w":    low_52w,
+                "day_high":   day_high,
+                "day_low":    day_low,
+                "p_change":   p_change,
+                "prev_close": prev_close,
+                "source":     "yahoo_finance",
+                "timestamp":  datetime.now(
+                    pytz.timezone("Asia/Kolkata")
+                ).isoformat(),
+                "error":      None,
+            }
+
+        except Exception as exc:
+            print(f"  [YahooFinanceProvider] {symbol}: {exc}")
+            return _empty_stock_data(symbol, str(exc))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 2 — VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def validate_stock_data(data: dict) -> bool:
+    """
+    Returns True only if the data is usable.
+    Rejects: error states, zero prices, inverted 52W range.
+    """
+    if data.get("error"):
+        return False
+    if data.get("last_price", 0.0) <= 0.0:
+        return False
+    if data.get("high_52w", 0.0) <= 0.0:
+        return False
+    if data.get("low_52w", 0.0) <= 0.0:
+        return False
+    if data.get("high_52w", 0.0) < data.get("low_52w", 0.0):
+        return False
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 3 — NORMALIZATION  (already handled inside each provider)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Each provider returns the same StockData dict shape.
+# No extra normalization step needed for Phase 1.
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 4 — CACHE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CACHE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "cache.json"
+)
+
+
+def load_cache() -> dict:
+    """Load persistent cache from data/cache.json."""
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, "r") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            print(f"  [Cache] Load failed: {exc} — starting fresh.")
+    return {"last_updated": None, "stocks": {}}
+
+
+def save_cache(cache: dict) -> None:
+    """Persist cache to data/cache.json (committed back to repo by workflow)."""
+    os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
+    try:
+        with open(_CACHE_FILE, "w") as fh:
+            json.dump(cache, fh, indent=2)
+        print(f"  [Cache] Saved {len(cache.get('stocks', {}))} entries.")
+    except Exception as exc:
+        print(f"  [Cache] Save failed: {exc}")
+
+
+def resolve_with_cache(symbol: str, live: dict, cache: dict) -> dict:
+    """
+    Return live data if valid; otherwise fall back to the last cached value.
+    Marks the source as 'cache' so the image can show a staleness indicator.
+    """
+    if validate_stock_data(live):
+        return live
+
+    cached = cache.get("stocks", {}).get(symbol)
+    if cached and validate_stock_data(cached):
+        print(f"  [Cache] Using cached data for {symbol} "
+              f"(live error: {live.get('error', 'invalid')})")
+        return {**cached, "source": "cache"}
+
+    # Nothing usable — return the error dict
+    return live
+
+
+def update_cache(cache: dict, quotes: dict[str, dict]) -> dict:
+    """Merge validated live quotes into the cache."""
+    ist = pytz.timezone("Asia/Kolkata")
+    for sym, data in quotes.items():
+        if validate_stock_data(data) and data.get("source") != "cache":
+            cache["stocks"][sym] = data
+    cache["last_updated"] = datetime.now(ist).isoformat()
+    return cache
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 5 — OPPORTUNITY SCORING ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def score_opportunity(data: dict) -> dict:
+    """
+    Enrich a StockData dict with opportunity metrics:
+      pct_from_high  — % below 52W high (negative = below)
+      pct_from_low   — % above 52W low  (positive = above)
+      new_52w_high   — True if today's price is at/near the 52W high
+      new_52w_low    — True if today's price is at/near the 52W low
+    """
+    if not validate_stock_data(data):
+        return {**data, "pct_from_high": 0.0, "pct_from_low": 0.0,
+                "new_52w_high": False, "new_52w_low": False}
+
+    lp  = data["last_price"]
+    h52 = data["high_52w"]
+    l52 = data["low_52w"]
+
+    pct_from_high = round((lp - h52) / h52 * 100, 2) if h52 else 0.0
+    pct_from_low  = round((lp - l52) / l52 * 100, 2) if l52 else 0.0
+    new_52w_high  = h52 > 0 and lp >= h52 * 0.9995
+    new_52w_low   = l52 > 0 and lp <= l52 * 1.0005
+
+    return {
+        **data,
+        "pct_from_high": pct_from_high,
+        "pct_from_low":  pct_from_low,
+        "new_52w_high":  new_52w_high,
+        "new_52w_low":   new_52w_low,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 6 — VISUALIZATION ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Palette ───────────────────────────────────────────────────────────────────
 C_BG      = (13,  17,  23)
 C_CARD    = (22,  27,  34)
 C_CARD2   = (30,  37,  46)
@@ -247,11 +459,11 @@ C_ORANGE  = (240, 136, 62)
 C_RED     = (248, 81,  73)
 C_BLUE    = (88,  166, 255)
 C_GOLD    = (255, 200, 0)
+C_PURPLE  = (167, 139, 250)
 
 IMG_W = 900
 PAD   = 20
 
-# Column x-positions and widths (usable = 860 px)
 COL_X = {
     "stock":    PAD,
     "price":    PAD + 175,
@@ -289,7 +501,6 @@ COL_LABELS = [
 ]
 
 
-# ── Font Loader ───────────────────────────────────────────────────────────────
 def _find_font(size: int, bold: bool = False):
     if not PIL_AVAILABLE:
         return None
@@ -315,7 +526,7 @@ def _find_font(size: int, bold: bool = False):
     return ImageFont.load_default()
 
 
-def _tw(draw, text, font):
+def _tw(draw, text: str, font) -> int:
     try:
         b = draw.textbbox((0, 0), text, font=font)
         return b[2] - b[0]
@@ -323,18 +534,17 @@ def _tw(draw, text, font):
         return len(text) * 8
 
 
-def _center(draw, x, y, w, text, font, color):
-    tw = _tw(draw, text, font)
-    draw.text((x + (w - tw) // 2, y), text, font=font, fill=color)
+def _center(draw, x, y, w, text, font, color) -> None:
+    draw.text((x + (w - _tw(draw, text, font)) // 2, y),
+              text, font=font, fill=color)
 
 
-def _right(draw, x, y, w, text, font, color):
-    tw = _tw(draw, text, font)
-    draw.text((x + w - tw - 4, y), text, font=font, fill=color)
+def _right(draw, x, y, w, text, font, color) -> None:
+    draw.text((x + w - _tw(draw, text, font) - 4, y),
+              text, font=font, fill=color)
 
 
-# ── Signal Helpers ────────────────────────────────────────────────────────────
-def _dip_color(pct):
+def _dip_color(pct: float) -> tuple:
     a = abs(pct)
     if a >= 15: return C_RED
     if a >= 10: return C_ORANGE
@@ -342,7 +552,7 @@ def _dip_color(pct):
     return C_GREEN
 
 
-def _dip_label(pct):
+def _dip_label(pct: float) -> str:
     if pct >= 0:    return "AT/NEAR PEAK"
     a = abs(pct)
     if a >= 20:     return "CRASH ZONE"
@@ -352,198 +562,16 @@ def _dip_label(pct):
     return "NEAR PEAK"
 
 
-def _day_color(pct):
+def _day_color(pct: float) -> tuple:
     if pct > 0: return C_GREEN
     if pct < 0: return C_RED
     return C_SUBTEXT
 
 
-# ── NSE Session ───────────────────────────────────────────────────────────────
-def build_nse_session() -> requests.Session:
-    """
-    Identical session-building strategy to the working market_alert.py:
-      1. Visit homepage  (sets initial cookies)
-      2. Visit equity market page  (sets cookies for equity-stockIndices)
-    No warm-up API call — that caused empty-body failures.
-    """
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            session = requests.Session()
-            session.headers.update(NSE_HEADERS)
-
-            print(f"  [Attempt {attempt}] Visiting NSE homepage for cookies...")
-            session.get("https://www.nseindia.com", timeout=TIMEOUT_HOME)
-            time.sleep(3)
-
-            print(f"  [Attempt {attempt}] Visiting equity market page...")
-            session.headers.update(
-                {"Referer": "https://www.nseindia.com/"}
-            )
-            session.get(
-                "https://www.nseindia.com/market-data/live-equity-market",
-                timeout=TIMEOUT_HOME,
-            )
-            time.sleep(2)
-
-            return session
-        except Exception as e:
-            print(f"  WARNING: Session attempt {attempt} failed: {e}")
-            if attempt < MAX_RETRIES:
-                time.sleep(attempt * 10)
-            else:
-                raise RuntimeError(f"NSE session failed: {e}") from e
-
-
-# ── Fetch equity-stockIndices (same endpoint type as allIndices) ──────────────
-def fetch_equity_index(session: requests.Session, index_name: str) -> list:
-    """
-    Fetch all stocks in an NSE equity index.
-    Strategy:
-      1. Visit the specific index page (sets cookies + correct Referer)
-      2. Call equity-stockIndices API with that Referer
-    Same pattern as allIndices — works from GitHub Actions.
-    """
-    encoded  = url_quote(index_name)
-    page_url = (f"https://www.nseindia.com/market-data/live-equity-market"
-                f"?index={encoded}")
-    api_url  = f"https://www.nseindia.com/api/equity-stockIndices?index={encoded}"
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            # Step A: visit the specific index page — this sets the cookies
-            # and Referer that NSE requires for equity-stockIndices.
-            print(f"    [Attempt {attempt}] Visiting index page: {index_name}...")
-            session.headers.update(
-                {"Referer": "https://www.nseindia.com/market-data/live-equity-market"}
-            )
-            session.get(page_url, timeout=TIMEOUT_HOME)
-            time.sleep(2)
-
-            # Step B: call the API — Referer must be the index page URL
-            print(f"    [Attempt {attempt}] Calling equity-stockIndices: {index_name}...")
-            session.headers.update({"Referer": page_url})
-            resp = session.get(api_url, timeout=TIMEOUT_API)
-
-            # Log status for debugging
-            print(f"    HTTP {resp.status_code}  body_len={len(resp.content)} bytes")
-            resp.raise_for_status()
-
-            if not resp.content:
-                raise ValueError(f"Empty response body for {index_name}")
-
-            data = resp.json().get("data", [])
-            # First row is the index summary row — skip it
-            stocks = [
-                d for d in data
-                if d.get("symbol") and d.get("symbol") not in (index_name, "")
-            ]
-            print(f"    OK: {len(stocks)} stocks in {index_name}")
-            return stocks
-        except Exception as e:
-            print(f"    WARNING: {index_name} attempt {attempt} failed: {e}")
-            if attempt < MAX_RETRIES:
-                time.sleep(attempt * 10)
-            else:
-                print(f"    ERROR: Could not fetch {index_name} after {MAX_RETRIES} attempts")
-                return []
-
-
-# ── Build stock lookup from all fetched indices ───────────────────────────────
-def fetch_all_wishlist_data(session: requests.Session) -> dict:
-    """
-    Fetch quotes for all wishlist stocks.
-    Strategy: fetch NIFTY 500 + NIFTY MICROCAP 250 → build lookup dict.
-    Returns {symbol: quote_dict}
-    """
-    # ── Step 1: Build master lookup from NSE indices ──────────────────────────
-    master_lookup = {}
-    for idx_name in NSE_EQUITY_INDICES:
-        print(f"  Fetching index data: {idx_name}...")
-        stocks = fetch_equity_index(session, idx_name)
-        for item in stocks:
-            sym = item.get("symbol", "").strip()
-            if sym and sym not in master_lookup:
-                master_lookup[sym] = item
-        time.sleep(2)
-
-    print(f"  Master lookup built: {len(master_lookup)} unique stocks\n")
-
-    # ── Step 2: Map wishlist symbols to their data ────────────────────────────
-    unique_symbols = {}
-    for sec in WISHLIST_SECTORS:
-        for stk in sec["stocks"]:
-            unique_symbols[stk["symbol"]] = True
-
-    def _f(val):
-        try:
-            return float(val or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    quotes = {}
-    for sym in unique_symbols:
-        item = master_lookup.get(sym)
-        if item:
-            last_price  = _f(item.get("lastPrice"))
-            high_52w    = _f(item.get("yearHigh"))
-            low_52w     = _f(item.get("yearLow"))
-            day_high    = _f(item.get("dayHigh"))
-            day_low     = _f(item.get("dayLow"))
-            p_change    = _f(item.get("pChange"))
-            prev_close  = _f(item.get("previousClose"))
-
-            pct_from_high = (
-                round((last_price - high_52w) / high_52w * 100, 2)
-                if high_52w else 0.0
-            )
-            pct_from_low = (
-                round((last_price - low_52w) / low_52w * 100, 2)
-                if low_52w else 0.0
-            )
-            new_52w_high = high_52w > 0 and last_price >= high_52w * 0.9995
-            new_52w_low  = low_52w  > 0 and last_price <= low_52w  * 1.0005
-
-            print(f"  OK {sym}: Rs.{last_price:,.2f}  "
-                  f"52wH={high_52w:,.2f}  52wL={low_52w:,.2f}  "
-                  f"day={p_change:+.2f}%")
-
-            quotes[sym] = {
-                "symbol":        sym,
-                "last_price":    last_price,
-                "high_52w":      high_52w,
-                "low_52w":       low_52w,
-                "day_high":      day_high,
-                "day_low":       day_low,
-                "p_change":      p_change,
-                "prev_close":    prev_close,
-                "pct_from_high": pct_from_high,
-                "pct_from_low":  pct_from_low,
-                "new_52w_high":  new_52w_high,
-                "new_52w_low":   new_52w_low,
-                "error":         None,
-            }
-        else:
-            print(f"  WARNING: {sym} not found in fetched indices")
-            quotes[sym] = {
-                "symbol":        sym,
-                "last_price":    0.0, "high_52w":    0.0, "low_52w":     0.0,
-                "day_high":      0.0, "day_low":     0.0, "p_change":    0.0,
-                "prev_close":    0.0, "pct_from_high": 0.0, "pct_from_low": 0.0,
-                "new_52w_high":  False, "new_52w_low": False,
-                "error":         "Not found in NIFTY 500 / NIFTY MICROCAP 250",
-            }
-
-    return quotes
-
-
-# ── Build one sector-group image ──────────────────────────────────────────────
 def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
-    """
-    Build a PNG for one sector group (5 sectors, ~900×900 px).
-    """
+    """Build one PNG for a sector group (~900×900 px)."""
     sectors = [WISHLIST_SECTORS[i] for i in group["indices"]]
 
-    # Calculate height
     img_h = H_HEADER + H_FOOTER
     for sec in sectors:
         img_h += H_SECTOR_BAR + H_COL_HEADER
@@ -553,7 +581,6 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
     img  = Image.new("RGB", (IMG_W, img_h), C_BG)
     draw = ImageDraw.Draw(img)
 
-    # Fonts
     f_title  = _find_font(20, bold=True)
     f_part   = _find_font(12, bold=True)
     f_sub    = _find_font(12, bold=False)
@@ -566,46 +593,39 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
     f_flag   = _find_font(10, bold=True)
     f_note   = _find_font(10, bold=False)
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    # Header
     draw.rectangle([(0, 0), (IMG_W, H_HEADER)], fill=C_CARD)
     draw.rectangle([(0, H_HEADER - 2), (IMG_W, H_HEADER)], fill=C_BORDER)
-
-    title = "WISHLIST STOCK TRACKER"
-    _center(draw, 0, 10, IMG_W, title, f_title, C_BLUE)
-
-    part_str = f"Part {group['part']}  —  {group['label']}"
-    _center(draw, 0, 38, IMG_W, part_str, f_part, C_GOLD)
-
+    _center(draw, 0, 10, IMG_W, "WISHLIST STOCK TRACKER", f_title, C_BLUE)
+    _center(draw, 0, 38, IMG_W,
+            f"Part {group['part']}  —  {group['label']}", f_part, C_GOLD)
     _center(draw, 0, 60, IMG_W, date_str, f_sub, C_SUBTEXT)
 
-    # ── Sector sections ───────────────────────────────────────────────────────
     y = H_HEADER
 
     for sec in sectors:
-        sector_name  = sec["sector"]
         sector_color = sec["color"]
         stocks       = sec["stocks"]
 
-        # Sector header bar
+        # Sector bar
         r, g, b = sector_color
-        bg = (max(0, r // 5), max(0, g // 5), max(0, b // 5))
-        draw.rectangle([(0, y), (IMG_W, y + H_SECTOR_BAR)], fill=bg)
+        draw.rectangle([(0, y), (IMG_W, y + H_SECTOR_BAR)],
+                       fill=(max(0, r // 5), max(0, g // 5), max(0, b // 5)))
         draw.rectangle([(0, y), (5, y + H_SECTOR_BAR)], fill=sector_color)
         draw.text((14, y + (H_SECTOR_BAR - 14) // 2),
-                  sector_name, font=f_sector, fill=sector_color)
+                  sec["sector"], font=f_sector, fill=sector_color)
         badge = f"{len(stocks)} stock{'s' if len(stocks) > 1 else ''}"
-        bw = _tw(draw, badge, f_note)
-        draw.text((IMG_W - PAD - bw, y + (H_SECTOR_BAR - 10) // 2),
+        draw.text((IMG_W - PAD - _tw(draw, badge, f_note),
+                   y + (H_SECTOR_BAR - 10) // 2),
                   badge, font=f_note, fill=sector_color)
         y += H_SECTOR_BAR
 
-        # Column header row
+        # Column header
         draw.rectangle([(0, y), (IMG_W, y + H_COL_HEADER)], fill=C_CARD2)
         draw.rectangle([(0, y + H_COL_HEADER - 1), (IMG_W, y + H_COL_HEADER)],
                        fill=C_BORDER)
-        for col_key, col_label in COL_LABELS:
-            _center(draw, COL_X[col_key], y + 9, COL_W[col_key],
-                    col_label, f_colhdr, C_SUBTEXT)
+        for ck, cl in COL_LABELS:
+            _center(draw, COL_X[ck], y + 9, COL_W[ck], cl, f_colhdr, C_SUBTEXT)
         y += H_COL_HEADER
 
         # Stock rows
@@ -620,25 +640,30 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
             draw.rectangle([(PAD, y + H_STOCK_ROW - 1),
                              (IMG_W - PAD, y + H_STOCK_ROW)], fill=C_BORDER)
 
-            ry1 = y + 7    # symbol line
-            ry2 = y + 27   # name / sub-data line
+            ry1 = y + 7
+            ry2 = y + 27
 
-            if q.get("error"):
+            if not validate_stock_data(q):
+                # Show error / cache indicator
+                src = q.get("source", "error")
+                err_color = C_YELLOW if src == "cache" else C_RED
                 draw.text((COL_X["stock"] + 4, ry1), sym,
-                          font=f_sym, fill=C_RED)
-                draw.text((COL_X["stock"] + 4, ry2), "DATA UNAVAILABLE",
-                          font=f_name, fill=C_RED)
+                          font=f_sym, fill=err_color)
+                label = "CACHED DATA" if src == "cache" else "DATA UNAVAILABLE"
+                draw.text((COL_X["stock"] + 4, ry2), label,
+                          font=f_name, fill=err_color)
                 y += H_STOCK_ROW
                 continue
 
-            lp   = q["last_price"]
-            h52  = q["high_52w"]
-            l52  = q["low_52w"]
-            pc   = q["p_change"]
-            pfh  = q["pct_from_high"]
-            pfl  = q["pct_from_low"]
-            nwh  = q["new_52w_high"]
-            nwl  = q["new_52w_low"]
+            lp  = q["last_price"]
+            h52 = q["high_52w"]
+            l52 = q["low_52w"]
+            pc  = q["p_change"]
+            pfh = q["pct_from_high"]
+            pfl = q["pct_from_low"]
+            nwh = q["new_52w_high"]
+            nwl = q["new_52w_low"]
+            src = q.get("source", "")
 
             # Col 1 — Stock
             sym_col = C_RED if note == "EXITING" else C_TEXT
@@ -651,21 +676,24 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
                 draw.text((COL_X["stock"] + 4, ry2 + 12),
                           f"[{note}]", font=f_note, fill=nc)
 
-            # Col 2 — Price
+            # Col 2 — Price  (dim if from cache)
+            price_col = C_SUBTEXT if src == "cache" else C_TEXT
             _right(draw, COL_X["price"], ry1, COL_W["price"],
-                   f"Rs.{lp:,.2f}", f_datab, C_TEXT)
+                   f"Rs.{lp:,.2f}", f_datab, price_col)
+            if src == "cache":
+                _right(draw, COL_X["price"], ry2, COL_W["price"],
+                       "[cached]", f_note, C_YELLOW)
 
             # Col 3 — 52W High
             _right(draw, COL_X["high52w"], ry1, COL_W["high52w"],
                    f"Rs.{h52:,.2f}", f_data, C_SUBTEXT)
 
-            # Col 4 — % from 52W High  (color-coded)
+            # Col 4 — % from 52W High
             dc = _dip_color(pfh)
-            dl = _dip_label(pfh)
             _center(draw, COL_X["pct_high"], ry1, COL_W["pct_high"],
                     f"{pfh:+.2f}%", f_datab, dc)
             _center(draw, COL_X["pct_high"], ry2, COL_W["pct_high"],
-                    dl, f_note, dc)
+                    _dip_label(pfh), f_note, dc)
 
             # Col 5 — 52W Low
             _right(draw, COL_X["low52w"], ry1, COL_W["low52w"],
@@ -700,10 +728,9 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
 
         y += H_SECTOR_GAP
 
-    # ── Footer ────────────────────────────────────────────────────────────────
+    # Footer
     draw.rectangle([(0, y), (IMG_W, y + H_FOOTER)], fill=C_CARD)
     draw.rectangle([(0, y), (IMG_W, y + 2)], fill=C_BORDER)
-
     guide = [
         ("<5% NEAR PEAK",    C_GREEN),
         ("5-9% MINOR DIP",   C_YELLOW),
@@ -715,9 +742,9 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
     for gt, gc in guide:
         draw.text((gx, y + 10), gt, font=f_note, fill=gc)
         gx += _tw(draw, gt, f_note) + 20
-
-    disc = "Data via NSE India (official). Not financial advice. Educational purpose only."
-    _center(draw, 0, y + 34, IMG_W, disc, f_note, C_SUBTEXT)
+    _center(draw, 0, y + 34, IMG_W,
+            "Data via Yahoo Finance (NSE). Not financial advice. Educational only.",
+            f_note, C_SUBTEXT)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -725,9 +752,8 @@ def build_group_image(group: dict, quotes: dict, date_str: str) -> bytes:
     return buf.read()
 
 
-# ── Build all 4 group images ──────────────────────────────────────────────────
-def build_all_images(quotes: dict) -> list:
-    """Returns list of (image_bytes, caption) for each sector group."""
+def build_all_images(quotes: dict) -> list[tuple[bytes, str]]:
+    """Returns [(image_bytes, caption), ...] for all 4 sector groups."""
     ist      = pytz.timezone("Asia/Kolkata")
     now      = datetime.now(ist)
     date_str = now.strftime("%d %b %Y  |  %I:%M %p IST")
@@ -746,13 +772,15 @@ def build_all_images(quotes: dict) -> list:
     return images
 
 
-# ── Plain-text fallback ───────────────────────────────────────────────────────
 def build_text_message(quotes: dict) -> str:
+    """Plain-text fallback for when Pillow is unavailable."""
     ist      = pytz.timezone("Asia/Kolkata")
     now      = datetime.now(ist)
     date_str = now.strftime("%d %b %Y  |  %I:%M %p IST")
 
-    lines = ["=" * 52, f"  WISHLIST STOCK TRACKER  —  {date_str}", "=" * 52]
+    lines = ["=" * 52,
+             f"  WISHLIST STOCK TRACKER  —  {date_str}",
+             "=" * 52]
 
     for sec in WISHLIST_SECTORS:
         lines.append(f"\n{sec['sector']}")
@@ -761,8 +789,9 @@ def build_text_message(quotes: dict) -> str:
             sym  = stk["symbol"]
             note = stk.get("note", "")
             q    = quotes.get(sym, {})
-            if q.get("error"):
-                lines.append(f"  {sym}: DATA UNAVAILABLE")
+            if not validate_stock_data(q):
+                src = q.get("source", "error")
+                lines.append(f"  {sym}: {'CACHED' if src == 'cache' else 'UNAVAILABLE'}")
                 continue
             pfh  = q["pct_from_high"]
             flag = (" [NEW 52W HIGH!]" if q["new_52w_high"] else
@@ -775,13 +804,17 @@ def build_text_message(quotes: dict) -> str:
             )
 
     lines += ["\n" + "=" * 52,
-              "Data via NSE India. Not financial advice.", "=" * 52]
+              "Data via Yahoo Finance (NSE). Not financial advice.",
+              "=" * 52]
     return "\n".join(lines)
 
 
-# ── Telegram ──────────────────────────────────────────────────────────────────
-def send_photo(bot_token: str, chat_id: str,
-               image_bytes: bytes, caption: str) -> bool:
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 7 — TELEGRAM DELIVERY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _send_photo(bot_token: str, chat_id: str,
+                image_bytes: bytes, caption: str) -> bool:
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{bot_token}/sendPhoto",
@@ -791,12 +824,12 @@ def send_photo(bot_token: str, chat_id: str,
         )
         resp.raise_for_status()
         return True
-    except Exception as e:
-        print(f"  WARNING: sendPhoto to {chat_id} failed: {e}")
+    except Exception as exc:
+        print(f"  [Telegram] sendPhoto to {chat_id} failed: {exc}")
         return False
 
 
-def send_message(bot_token: str, chat_id: str, text: str) -> bool:
+def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
@@ -805,8 +838,8 @@ def send_message(bot_token: str, chat_id: str, text: str) -> bool:
         )
         resp.raise_for_status()
         return True
-    except Exception as e:
-        print(f"  WARNING: sendMessage to {chat_id} failed: {e}")
+    except Exception as exc:
+        print(f"  [Telegram] sendMessage to {chat_id} failed: {exc}")
         return False
 
 
@@ -817,24 +850,41 @@ def notify_all(bot_token: str, chat_ids_str: str,
         print(f"  Sending to {chat_id}...")
         if images and PIL_AVAILABLE:
             for img_bytes, caption in images:
-                ok = send_photo(bot_token, chat_id, img_bytes, caption)
+                ok = _send_photo(bot_token, chat_id, img_bytes, caption)
                 if not ok:
-                    send_message(bot_token, chat_id, text_msg)
+                    _send_message(bot_token, chat_id, text_msg)
                     break
                 time.sleep(1.5)
         else:
-            send_message(bot_token, chat_id, text_msg)
+            _send_message(bot_token, chat_id, text_msg)
         time.sleep(2)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def main():
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_unique_symbols() -> list[str]:
+    """Return deduplicated list of all NSE symbols across all sectors."""
+    seen: dict[str, bool] = {}
+    for sec in WISHLIST_SECTORS:
+        for stk in sec["stocks"]:
+            seen[stk["symbol"]] = True
+    return list(seen.keys())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN ORCHESTRATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def main() -> None:
     ist = pytz.timezone("Asia/Kolkata")
     now = datetime.now(ist)
     print(f"\n{'='*60}")
     print(f"  WISHLIST STOCK TRACKER  —  {now.strftime('%d %b %Y  %I:%M %p IST')}")
     print(f"{'='*60}\n")
 
+    # ── Credentials ───────────────────────────────────────────────────────────
     bot_token    = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_ids_str = os.environ.get("WISHLIST_TELEGRAM_CHAT_IDS", "").strip()
 
@@ -846,32 +896,55 @@ def main():
             "Add it in GitHub → Settings → Secrets and variables → Actions."
         )
 
-    # Step 1 — NSE session
-    print("Step 1: Building NSE session...")
-    session = build_nse_session()
-    print("  NSE session ready.\n")
+    symbols = get_unique_symbols()
+    print(f"Tracking {len(symbols)} unique symbols across "
+          f"{len(WISHLIST_SECTORS)} sectors.\n")
 
-    # Step 2 — Fetch stock data via equity-stockIndices
-    print("Step 2: Fetching stock data from NSE equity indices...")
-    quotes = fetch_all_wishlist_data(session)
-    found  = sum(1 for q in quotes.values() if not q.get("error"))
-    print(f"\n  {found}/{len(quotes)} symbols fetched successfully.\n")
+    # ── Step 1: Load cache ────────────────────────────────────────────────────
+    print("Step 1: Loading cache...")
+    cache = load_cache()
+    cached_count = len(cache.get("stocks", {}))
+    print(f"  Cache loaded: {cached_count} entries "
+          f"(last updated: {cache.get('last_updated', 'never')})\n")
 
-    # Step 3 — Build 4 sector-group images
-    images = []
+    # ── Step 2: Fetch live data ───────────────────────────────────────────────
+    print("Step 2: Fetching live data via Yahoo Finance...")
+    provider  = YahooFinanceProvider()
+    live_data = provider.get_all_stocks(symbols)
+    live_ok   = sum(1 for d in live_data.values() if validate_stock_data(d))
+    print(f"  Live fetch: {live_ok}/{len(symbols)} symbols OK\n")
+
+    # ── Step 3: Validate + cache fallback + score ─────────────────────────────
+    print("Step 3: Validating, resolving cache fallbacks, scoring...")
+    quotes: dict[str, dict] = {}
+    for sym in symbols:
+        resolved      = resolve_with_cache(sym, live_data[sym], cache)
+        quotes[sym]   = score_opportunity(resolved)
+        src           = quotes[sym].get("source", "error")
+        valid         = validate_stock_data(quotes[sym])
+        status        = f"OK ({src})" if valid else f"FAIL ({quotes[sym].get('error', '?')})"
+        print(f"  {sym:<14} {status}")
+
+    # ── Step 4: Update and save cache ─────────────────────────────────────────
+    print("\nStep 4: Updating cache...")
+    cache = update_cache(cache, quotes)
+    save_cache(cache)
+
+    # ── Step 5: Build images ──────────────────────────────────────────────────
+    images: list = []
     if PIL_AVAILABLE:
-        print("Step 3: Building 4 sector-group images...")
+        print("\nStep 5: Building 4 sector-group images...")
         try:
             images = build_all_images(quotes)
             print(f"  {len(images)} images built.\n")
-        except Exception as e:
-            print(f"  WARNING: Image build failed: {e}\n")
+        except Exception as exc:
+            print(f"  WARNING: Image build failed: {exc}\n")
 
-    # Step 4 — Build text fallback
+    # ── Step 6: Build text fallback ───────────────────────────────────────────
     text_msg = build_text_message(quotes)
 
-    # Step 5 — Send to Telegram
-    print("Step 4: Sending to Telegram...")
+    # ── Step 7: Send to Telegram ──────────────────────────────────────────────
+    print("Step 6: Sending to Telegram...")
     notify_all(bot_token, chat_ids_str, images, text_msg)
     print("\nDone!")
 

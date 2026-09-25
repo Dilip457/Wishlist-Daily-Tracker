@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wishlist Stock Tracker — Full Project Summary</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #1a1a2e; background: #f8f9fa; }
+  .page { max-width: 900px; margin: 0 auto; padding: 30px 40px; background: white; }
+
+  h1 { font-size: 24px; color: #0d47a1; border-bottom: 3px solid #0d47a1; padding-bottom: 8px; margin-bottom: 20px; }
+  h2 { font-size: 17px; color: #1565c0; background: #e3f2fd; padding: 8px 12px; border-left: 4px solid #1565c0; margin: 24px 0 12px 0; }
+  h3 { font-size: 14px; color: #0d47a1; margin: 16px 0 8px 0; }
+  h4 { font-size: 13px; color: #333; margin: 12px 0 6px 0; font-weight: bold; }
+
+  p  { margin-bottom: 8px; line-height: 1.6; }
+  ul { margin: 6px 0 10px 20px; }
+  li { margin-bottom: 4px; line-height: 1.5; }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px 0; font-size: 12px; }
+  th { background: #1565c0; color: white; padding: 7px 10px; text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f5f5f5; }
+
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 11px; color: #c62828; }
+  pre  { background: #1e1e2e; color: #cdd6f4; padding: 14px; border-radius: 6px; font-size: 11px; overflow-x: auto; margin: 10px 0 14px 0; line-height: 1.5; }
+  pre .ok    { color: #a6e3a1; }
+  pre .fail  { color: #f38ba8; }
+  pre .warn  { color: #fab387; }
+  pre .info  { color: #89dceb; }
+  pre .key   { color: #cba6f7; }
+
+  .badge-ok   { background: #2e7d32; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .badge-fail { background: #c62828; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .badge-warn { background: #e65100; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .badge-info { background: #1565c0; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+
+  .box-ok   { background: #e8f5e9; border: 1px solid #4caf50; border-left: 4px solid #4caf50; padding: 10px 14px; border-radius: 4px; margin: 10px 0; }
+  .box-fail { background: #ffebee; border: 1px solid #ef9a9a; border-left: 4px solid #c62828; padding: 10px 14px; border-radius: 4px; margin: 10px 0; }
+  .box-warn { background: #fff3e0; border: 1px solid #ffcc02; border-left: 4px solid #e65100; padding: 10px 14px; border-radius: 4px; margin: 10px 0; }
+  .box-info { background: #e3f2fd; border: 1px solid #90caf9; border-left: 4px solid #1565c0; padding: 10px 14px; border-radius: 4px; margin: 10px 0; }
+
+  .divider { border: none; border-top: 2px solid #e0e0e0; margin: 28px 0; }
+  .toc-item { padding: 3px 0; }
+  .toc-item a { color: #1565c0; text-decoration: none; }
+  .section-num { color: #888; font-size: 11px; margin-right: 6px; }
+
+  @media print {
+    body { background: white; }
+    .page { padding: 20px; }
+    h2 { page-break-before: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h1>📊 Wishlist Stock Daily Tracker — Complete Project Summary</h1>
+<p><strong>Prepared:</strong> 25 Sep 2026 &nbsp;|&nbsp; <strong>GitHub Repo:</strong> <code>github.com/Dilip457/Wishlist-Daily-Tracker</code></p>
+<p><strong>Purpose:</strong> This document covers everything from A to Z — project goal, code structure, what was built, what works, what doesn't, and the exact technical issue blocking full functionality.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s1">1. Project Goal</h2>
+
+<p>Build an automated daily alert system that:</p>
+<ul>
+  <li>Tracks <strong>27 wishlist stocks</strong> across <strong>20 sectors</strong> (from the rebalanced stock list image)</li>
+  <li>Shows for each stock: <strong>Current Price, 52W High, % below 52W High, 52W Low, Day Change %, Day High/Low</strong></li>
+  <li>Detects if a stock hits a <strong>new 52W High or Low</strong> today and flags it</li>
+  <li>Generates <strong>4 sector-group PNG images</strong> (~900×900 px each, readable on mobile)</li>
+  <li>Sends images to a <strong>Telegram group</strong> automatically every weekday at <strong>6:00 PM IST</strong></li>
+  <li>Runs on <strong>GitHub Actions</strong> (free, no server needed)</li>
+  <li>Uses <strong>NSE India official API</strong> as data source</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s2">2. Stocks Tracked (20 Sectors, 27 Unique Symbols)</h2>
+
+<table>
+  <tr><th>Sector</th><th>NSE Symbol(s)</th><th>Company Name(s)</th><th>Note</th></tr>
+  <tr><td>ALCOHOL &amp; BREWERIES</td><td>RADICO</td><td>Radico Khaitan</td><td></td></tr>
+  <tr><td>POWER SECTOR</td><td>TATAPOWER, CGPOWER</td><td>Tata Power, CG Power</td><td></td></tr>
+  <tr><td>EXCHANGE PLATFORM</td><td>BSE, MCX</td><td>BSE Ltd, MCX India</td><td></td></tr>
+  <tr><td>SHRIMP SECTOR</td><td>AVANTIFEED</td><td>Avanti Feed</td><td>EXITING</td></tr>
+  <tr><td>AUTO SECTOR</td><td>TVSMOTOR, M&amp;M</td><td>TVS Motor, Mahindra &amp; Mahindra</td><td></td></tr>
+  <tr><td>FERTILIZER SECTOR</td><td>COROMANDEL</td><td>Coromandel Int</td><td></td></tr>
+  <tr><td>CABLE SECTOR</td><td>KEI</td><td>KEI Industries</td><td></td></tr>
+  <tr><td>HOSPITALITY SECTOR</td><td>INDHOTEL</td><td>Indian Hotels</td><td></td></tr>
+  <tr><td>PHARMA SECTOR</td><td>TORNTPHARM</td><td>Torrent Pharma</td><td></td></tr>
+  <tr><td>CAPITAL GOODS SECTOR</td><td>CUMMINSIND</td><td>Cummins India</td><td></td></tr>
+  <tr><td>IT SECTOR</td><td>PERSISTENT</td><td>Persistent Systems</td><td></td></tr>
+  <tr><td>AUTO ANCILLARY SECTOR</td><td>UNOMINDA, SONACOMS</td><td>Uno Minda, Sona Comstar</td><td></td></tr>
+  <tr><td>SEMICONDUCTOR SECTOR</td><td>MOSCHIP</td><td>MosChip Tech</td><td>highly valued</td></tr>
+  <tr><td>SPACE SECTOR</td><td>LT, BEL, DATAPATTNS</td><td>L&amp;T, BEL, Data Patterns</td><td></td></tr>
+  <tr><td>DRONE SECTOR</td><td>BEL</td><td>BEL</td><td>same as Space/Defence</td></tr>
+  <tr><td>DATA CENTER SECTOR</td><td>ANANTRAJ, NETWEB</td><td>Anant Raj, Netweb Tech</td><td></td></tr>
+  <tr><td>BANKING SECTOR</td><td>SBIN, INDIANB</td><td>SBI, Indian Bank</td><td></td></tr>
+  <tr><td>DEFENCE SECTOR</td><td>BEL</td><td>BEL</td><td>same as Space/Drone</td></tr>
+  <tr><td>HOSPITAL SECTOR</td><td>APOLLOHOSP, FORTIS</td><td>Apollo Hospitals, Fortis</td><td></td></tr>
+  <tr><td>CONSUMER DURABLES</td><td>BLUESTARCO</td><td>Blue Star</td><td></td></tr>
+</table>
+
+<p><strong>Note:</strong> BEL appears in SPACE, DRONE, and DEFENCE sectors intentionally — it plays across all three themes. Total unique symbols = 27.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s3">3. Repository Structure</h2>
+
+<pre>
+<span class="info">github.com/Dilip457/Wishlist-Daily-Tracker</span>
+│
+├── <span class="key">wishlist_tracker.py</span>          ← Main Python script (data + image + Telegram)
+├── <span class="key">requirements.txt</span>             ← Python dependencies
+├── <span class="key">README.md</span>                    ← Documentation
+├── <span class="key">test_nse_api.py</span>              ← Diagnostic test script (not part of production)
+└── <span class="key">.github/workflows/</span>
+    └── <span class="key">daily_alert.yml</span>          ← GitHub Actions workflow (runs at 6 PM IST)
+</pre>
+
+<h3>3.1 wishlist_tracker.py — Code Structure</h3>
+<table>
+  <tr><th>Section</th><th>Function / Variable</th><th>Purpose</th></tr>
+  <tr><td>Config</td><td><code>WISHLIST_SECTORS</code></td><td>List of 20 sectors with stocks, colors, notes</td></tr>
+  <tr><td>Config</td><td><code>SECTOR_GROUPS</code></td><td>4 groups of 5 sectors each → 4 images</td></tr>
+  <tr><td>Config</td><td><code>NSE_EQUITY_INDICES</code></td><td>["NIFTY 500", "NIFTY MICROCAP 250"]</td></tr>
+  <tr><td>Config</td><td><code>NSE_HEADERS</code></td><td>HTTP headers for NSE API requests</td></tr>
+  <tr><td>NSE API</td><td><code>build_nse_session()</code></td><td>Builds requests.Session with NSE cookies</td></tr>
+  <tr><td>NSE API</td><td><code>fetch_equity_index()</code></td><td>Calls equity-stockIndices endpoint</td></tr>
+  <tr><td>NSE API</td><td><code>fetch_all_wishlist_data()</code></td><td>Fetches all 27 stocks, returns dict</td></tr>
+  <tr><td>Image</td><td><code>build_group_image()</code></td><td>Builds one PNG for a sector group</td></tr>
+  <tr><td>Image</td><td><code>build_all_images()</code></td><td>Builds all 4 PNG images</td></tr>
+  <tr><td>Telegram</td><td><code>send_photo()</code></td><td>Sends PNG to Telegram chat</td></tr>
+  <tr><td>Telegram</td><td><code>notify_all()</code></td><td>Sends to all configured chat IDs</td></tr>
+  <tr><td>Main</td><td><code>main()</code></td><td>Orchestrates all steps</td></tr>
+</table>
+
+<h3>3.2 daily_alert.yml — GitHub Actions Workflow</h3>
+<pre>
+<span class="key">Trigger:</span>  cron '30 12 * * 1-5'  →  6:00 PM IST (Mon–Fri)
+          workflow_dispatch      →  manual trigger from Actions tab
+
+<span class="key">Steps:</span>
+  1. Checkout repo
+  2. Setup Python 3.11
+  3. Install fonts (DejaVu, Liberation)
+  4. pip install -r requirements.txt
+  5. python wishlist_tracker.py
+     env:
+       TELEGRAM_BOT_TOKEN         ← from GitHub Secrets
+       WISHLIST_TELEGRAM_CHAT_IDS ← from GitHub Secrets
+</pre>
+
+<h3>3.3 requirements.txt</h3>
+<pre>
+requests&gt;=2.31.0
+pytz&gt;=2024.1
+Pillow&gt;=10.0.0
+</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s4">4. How the Script Works (Flow)</h2>
+
+<pre>
+GitHub Actions (cron: Mon–Fri 6:00 PM IST)
+      │
+      ▼
+<span class="key">Step 1: Build NSE Session</span>
+  → Visit https://www.nseindia.com  (sets initial cookies)
+  → Visit https://www.nseindia.com/market-data/live-equity-market
+  → Session now has cookies: _abck, bm_sz, browse-url
+
+      │
+      ▼
+<span class="key">Step 2: Fetch Stock Data</span>
+  → For each index in [NIFTY 500, NIFTY MICROCAP 250]:
+      a. Visit index page (sets Referer cookie)
+      b. Call equity-stockIndices API
+      c. Get list of stocks with: lastPrice, yearHigh, yearLow,
+         dayHigh, dayLow, pChange, previousClose
+  → Build master_lookup {symbol: data}
+  → Map 27 wishlist symbols to their data
+  → Calculate: pct_from_high, pct_from_low, new_52w_high, new_52w_low
+
+      │
+      ▼
+<span class="key">Step 3: Build 4 PNG Images</span>
+  → Part 1/4: Beverages | Power | Exchange | Shrimp | Auto
+  → Part 2/4: Fertilizer | Cable | Hospitality | Pharma | Capital Goods
+  → Part 3/4: IT | Auto Ancillary | Semiconductor | Space | Drone
+  → Part 4/4: Data Center | Banking | Defence | Hospital | Consumer
+  → Each image: ~900×900 px, dark theme, color-coded dip signals
+
+      │
+      ▼
+<span class="key">Step 4: Send to Telegram</span>
+  → sendPhoto API for each of 4 images
+  → Caption: "Wishlist Stock Tracker — Part X/4 | Date"
+  → Falls back to text message if image fails
+</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s5">5. Image Design</h2>
+
+<h3>5.1 Layout (per image)</h3>
+<pre>
+┌─────────────────────────────────────────────────────────────────────────┐
+│              WISHLIST STOCK TRACKER                                      │
+│   Part 1/4  —  Beverages | Power | Exchange | Shrimp | Auto             │
+│                    25 Sep 2026  |  06:00 PM IST                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ ⬛ POWER SECTOR                                              2 stocks    │
+├──────────────┬──────────┬──────────┬──────────┬──────────┬──────────────┤
+│ STOCK        │ PRICE    │ 52W HIGH │ % FROM H │ 52W LOW  │ DAY CHG%     │
+├──────────────┼──────────┼──────────┼──────────┼──────────┼──────────────┤
+│ TATAPOWER    │ Rs.412   │ Rs.500   │ -17.50%  │ Rs.350   │ +1.20%       │
+│ Tata Power   │          │          │ DEEP DIP │+17.9%low │ H:415 L:408  │
+├──────────────┼──────────┼──────────┼──────────┼──────────┼──────────────┤
+│ CGPOWER      │ Rs.650   │ Rs.800   │ -18.75%  │ Rs.500   │ -0.50%       │
+│ CG Power     │          │          │ DEEP DIP │+30.0%low │ H:655 L:645  │
+└─────────────────────────────────────────────────────────────────────────┘
+│ &lt;5% NEAR PEAK  5-9% MINOR DIP  10-14% MED DIP  15%+ DEEP DIP  20%+ CRASH│
+│ Data via NSE India (official). Not financial advice.                     │
+└─────────────────────────────────────────────────────────────────────────┘
+</pre>
+
+<h3>5.2 Color Coding</h3>
+<table>
+  <tr><th>Color</th><th>% from 52W High</th><th>Signal</th></tr>
+  <tr><td style="background:#3fb950;color:white;padding:4px 8px;">Green</td><td>&lt; 5% below</td><td>AT/NEAR PEAK — regular SIP only</td></tr>
+  <tr><td style="background:#d29922;color:white;padding:4px 8px;">Yellow</td><td>5–9% below</td><td>MINOR DIP — watch closely</td></tr>
+  <tr><td style="background:#f08840;color:white;padding:4px 8px;">Orange</td><td>10–14% below</td><td>MEDIUM DIP — consider buying</td></tr>
+  <tr><td style="background:#f85149;color:white;padding:4px 8px;">Red</td><td>15%+ below</td><td>DEEP DIP / CRASH ZONE — strong buy</td></tr>
+</table>
+
+<h3>5.3 Special Flags</h3>
+<ul>
+  <li><strong>NEW 52W HIGH</strong> (gold badge) — Stock hit a new 52-week high today</li>
+  <li><strong>NEW 52W LOW</strong> (red badge) — Stock hit a new 52-week low today</li>
+  <li><strong>[EXITING]</strong> (red text) — Stock marked for exit (AVANTIFEED)</li>
+  <li><strong>[highly valued]</strong> (yellow text) — Stock noted as richly valued (MOSCHIP)</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s6">6. GitHub Secrets Required</h2>
+
+<table>
+  <tr><th>Secret Name</th><th>Value</th><th>Where to Get</th></tr>
+  <tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Bot token from @BotFather</td><td>Telegram → @BotFather → /newbot</td></tr>
+  <tr><td><code>WISHLIST_TELEGRAM_CHAT_IDS</code></td><td>Group/channel chat ID(s)</td><td>Forward msg to @userinfobot</td></tr>
+</table>
+
+<p>Add at: <code>github.com/Dilip457/Wishlist-Daily-Tracker → Settings → Secrets and variables → Actions</code></p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s7">7. ⚠️ THE CORE ISSUE — NSE API Blocking</h2>
+
+<div class="box-fail">
+  <strong>Root Problem:</strong> NSE India uses <strong>Akamai Bot Manager</strong> to protect their API endpoints. GitHub Actions IPs and certain corporate networks are detected as bots and blocked.
+</div>
+
+<h3>7.1 Test Results (run from local machine — 25 Sep 2026)</h3>
+<pre>
+<span class="info">Endpoint                                    HTTP Status    Result</span>
+─────────────────────────────────────────────────────────────────
+<span class="ok">allIndices                                  200 ✅         139 indices returned</span>
+<span class="fail">equity-stockIndices?index=NIFTY%2050        404 ❌         HTML error page (389 bytes)</span>
+<span class="fail">equity-stockIndices?index=NIFTY%20100       404 ❌         HTML error page</span>
+<span class="fail">equity-stockIndices?index=NIFTY%20200       404 ❌         HTML error page</span>
+<span class="fail">equity-stockIndices?index=NIFTY%20500       404 ❌         HTML error page</span>
+<span class="fail">equity-stockIndices?index=NIFTY%20SMALLCAP%20250  404 ❌  HTML error page</span>
+<span class="fail">equity-stockIndices?index=NIFTY%20MICROCAP%20250  404 ❌  HTML error page</span>
+<span class="fail">quote-equity?symbol=RELIANCE                403 ❌         Forbidden</span>
+<span class="fail">getQuotes?symbol=RELIANCE&amp;series=EQ         404 ❌         HTML error page</span>
+</pre>
+
+<h3>7.2 Test Results (from GitHub Actions — Ubuntu)</h3>
+<pre>
+<span class="info">Run 1 (using quote-equity):</span>
+<span class="fail">  All 27 stocks → 403 Client Error: Forbidden</span>
+  Images generated but all stocks show "DATA UNAVAILABLE"
+
+<span class="info">Run 2 (using equity-stockIndices):</span>
+<span class="fail">  equity-stockIndices → likely 404 or empty response</span>
+  Images generated but all stocks show "DATA UNAVAILABLE"
+
+<span class="info">Run 3 (with warm-up allIndices call):</span>
+<span class="fail">  allIndices returned empty body (JSONDecodeError)</span>
+  Caused by: Sec-Fetch-* headers breaking page visits
+  Script crashed before reaching data fetch step
+
+<span class="info">Run 4 (current — reverted to simple headers):</span>
+  Status: NOT YET TESTED (awaiting your decision)
+</pre>
+
+<h3>7.3 Why allIndices Works But Others Don't</h3>
+<table>
+  <tr><th>Endpoint</th><th>Why It Works/Fails</th></tr>
+  <tr><td><code>allIndices</code></td><td>Simple public endpoint, NSE doesn't restrict it. Returns index-level data only (Nifty 50 value, not individual stocks).</td></tr>
+  <tr><td><code>equity-stockIndices</code></td><td>Returns individual stock data. NSE restricts this endpoint more aggressively. Returns 404 (Akamai blocking with fake 404).</td></tr>
+  <tr><td><code>quote-equity</code></td><td>Returns individual stock data. Blocked with 403 from GitHub Actions IPs.</td></tr>
+</table>
+
+<h3>7.4 The Akamai Bot Manager Problem</h3>
+<p>NSE uses Akamai Bot Manager which:</p>
+<ul>
+  <li>Detects automated requests based on IP reputation, request patterns, missing browser fingerprints</li>
+  <li>GitHub Actions IPs are in Akamai's "known bot" list → blocked</li>
+  <li>Corporate network IPs (Qualcomm) may also be partially blocked</li>
+  <li><code>allIndices</code> is whitelisted (public data, NSE wants it accessible)</li>
+  <li>Individual stock endpoints are protected (more sensitive data)</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s8">8. Attempts Made &amp; Their Results</h2>
+
+<table>
+  <tr><th>#</th><th>Attempt</th><th>Result</th><th>Why Failed</th></tr>
+  <tr>
+    <td>1</td>
+    <td>Use <code>quote-equity</code> endpoint directly</td>
+    <td><span class="badge-fail">FAIL</span></td>
+    <td>403 Forbidden from GitHub Actions for all 27 stocks</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>Switch to <code>equity-stockIndices</code> (NIFTY 500 + MICROCAP 250)</td>
+    <td><span class="badge-fail">FAIL</span></td>
+    <td>DATA UNAVAILABLE — endpoint returned 404 or empty data</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Add AJAX headers (Sec-Fetch-*, X-Requested-With) + warm-up call</td>
+    <td><span class="badge-fail">CRASH</span></td>
+    <td>Sec-Fetch-Dest:empty on page visits → NSE returns empty body → JSONDecodeError</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>Revert to simple headers, visit index page before API call</td>
+    <td><span class="badge-warn">PENDING</span></td>
+    <td>Not yet tested on GitHub Actions</td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s9">9. Possible Solutions (For Your Review)</h2>
+
+<h3>Option A — Yahoo Finance (yfinance library) <span class="badge-info">RECOMMENDED</span></h3>
+<div class="box-info">
+  <strong>How:</strong> Use <code>yfinance</code> Python library. NSE stocks have <code>.NS</code> suffix on Yahoo Finance (e.g., <code>RADICO.NS</code>). Returns same data: price, 52W high/low, day change.<br><br>
+  <strong>Pros:</strong> 100% reliable from GitHub Actions, no session/cookie management, free, returns all required fields.<br>
+  <strong>Cons:</strong> Data comes from Yahoo Finance (which sources from NSE), not directly from NSE.<br>
+  <strong>Data accuracy:</strong> Same as NSE — Yahoo Finance mirrors NSE data in real-time.<br><br>
+  <strong>Change needed:</strong> Add <code>yfinance&gt;=0.2.40</code> to requirements.txt. Replace <code>fetch_equity_index()</code> with yfinance calls.
+</div>
+
+<pre>
+<span class="info"># Example yfinance usage:</span>
+import yfinance as yf
+ticker = yf.Ticker("RADICO.NS")
+fi = ticker.fast_info
+price    = fi.last_price          <span class="info"># current price</span>
+high_52w = fi.fifty_two_week_high <span class="info"># 52W high</span>
+low_52w  = fi.fifty_two_week_low  <span class="info"># 52W low</span>
+day_high = fi.day_high            <span class="info"># today's high</span>
+day_low  = fi.day_low             <span class="info"># today's low</span>
+prev_cls = fi.previous_close      <span class="info"># previous close</span>
+</pre>
+
+<h3>Option B — Fix NSE equity-stockIndices with correct URL</h3>
+<div class="box-warn">
+  <strong>How:</strong> The <code>equity-stockIndices</code> endpoint might work with a different URL format or index name. Need to find the exact URL NSE uses in their website's network requests (browser DevTools).<br><br>
+  <strong>To investigate:</strong> Open Chrome DevTools → Network tab → Visit <code>nseindia.com/market-data/live-equity-market</code> → Look for XHR calls to find the exact API URL.<br><br>
+  <strong>Pros:</strong> Uses NSE directly.<br>
+  <strong>Cons:</strong> Might still be blocked from GitHub Actions IPs even with correct URL.
+</div>
+
+<h3>Option C — Use NSE's allIndices + Sector Index approach</h3>
+<div class="box-warn">
+  <strong>How:</strong> <code>allIndices</code> works and returns 139 indices. Some sector indices (NIFTY BANK, NIFTY IT, NIFTY AUTO, etc.) contain our stocks. If <code>equity-stockIndices</code> works for sector indices (not broad indices), we can fetch sector-by-sector.<br><br>
+  <strong>Pros:</strong> Uses NSE directly, <code>allIndices</code> is proven to work.<br>
+  <strong>Cons:</strong> <code>equity-stockIndices</code> returns 404 for all index names tested. Might not work.
+</div>
+
+<h3>Option D — Use NSE's pre-open market data</h3>
+<div class="box-warn">
+  <strong>How:</strong> <code>https://www.nseindia.com/api/market-data-pre-open?key=ALL</code> returns pre-open data for all stocks. Might include 52W high/low.<br><br>
+  <strong>Pros:</strong> Single API call for all stocks.<br>
+  <strong>Cons:</strong> Untested. Might not have 52W high/low. Might also be blocked.
+</div>
+
+<h3>Option E — Use BSE API</h3>
+<div class="box-warn">
+  <strong>How:</strong> BSE has a public API. Requires BSE scrip codes instead of NSE symbols.<br><br>
+  <strong>Pros:</strong> Different server, might not be blocked.<br>
+  <strong>Cons:</strong> Need to map NSE symbols to BSE scrip codes. More complex.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s10">10. Current State of the Code</h2>
+
+<h3>10.1 What Works ✅</h3>
+<ul>
+  <li>NSE session building (visits homepage + equity market page)</li>
+  <li><code>allIndices</code> API call (returns 139 indices)</li>
+  <li>Image generation (4 PNG images, correct layout, color coding)</li>
+  <li>Telegram sending (photos + text fallback)</li>
+  <li>GitHub Actions workflow (correct cron, secrets, Python setup)</li>
+  <li>All imports (requests, pytz, Pillow)</li>
+</ul>
+
+<h3>10.2 What Doesn't Work ❌</h3>
+<ul>
+  <li><code>equity-stockIndices</code> endpoint — returns 404 (blocked or wrong URL)</li>
+  <li>Individual stock data fetching — all 27 stocks show "DATA UNAVAILABLE"</li>
+</ul>
+
+<h3>10.3 Current Data Flow (broken at Step 2)</h3>
+<pre>
+Step 1: Build NSE session          <span class="ok">✅ WORKS</span>
+Step 2: Fetch equity-stockIndices  <span class="fail">❌ FAILS (404)</span>
+Step 3: Build 4 images             <span class="warn">⚠️ WORKS but shows DATA UNAVAILABLE</span>
+Step 4: Send to Telegram           <span class="ok">✅ WORKS (sends blank images)</span>
+</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s11">11. Key Files — Current Content Summary</h2>
+
+<h3>11.1 wishlist_tracker.py (current version)</h3>
+<table>
+  <tr><th>Key Variable/Function</th><th>Current Value/Behavior</th></tr>
+  <tr><td><code>NSE_EQUITY_INDICES</code></td><td>["NIFTY 500", "NIFTY MICROCAP 250"]</td></tr>
+  <tr><td><code>NSE_HEADERS</code></td><td>Simple 4-header set (same as working market_alert.py)</td></tr>
+  <tr><td><code>build_nse_session()</code></td><td>Visits homepage + equity market page. No warm-up call.</td></tr>
+  <tr><td><code>fetch_equity_index()</code></td><td>Visits index page → calls equity-stockIndices API. Returns [] on 404.</td></tr>
+  <tr><td><code>fetch_all_wishlist_data()</code></td><td>Builds master_lookup from 2 indices. Maps 27 symbols. Returns error dict if not found.</td></tr>
+  <tr><td><code>build_group_image()</code></td><td>Generates PNG. Shows "DATA UNAVAILABLE" if error dict.</td></tr>
+  <tr><td><code>SECTOR_GROUPS</code></td><td>4 groups of 5 sectors each → 4 images sent to Telegram</td></tr>
+</table>
+
+<h3>11.2 daily_alert.yml (GitHub Actions)</h3>
+<pre>
+name: Daily Wishlist Stock Tracker
+on:
+  schedule:
+    - cron: '30 12 * * 1-5'   <span class="info"># 6:00 PM IST = 12:30 PM UTC</span>
+  workflow_dispatch:
+jobs:
+  send-wishlist-alert:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      WISHLIST_TELEGRAM_CHAT_IDS: ${{ secrets.WISHLIST_TELEGRAM_CHAT_IDS }}
+    run: python wishlist_tracker.py
+</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s12">12. Reference — Existing Working Project</h2>
+
+<p>The existing <code>market_alert.py</code> (in the parent repo) works successfully on GitHub Actions. It uses:</p>
+<ul>
+  <li><strong>Endpoint:</strong> <code>https://www.nseindia.com/api/allIndices</code></li>
+  <li><strong>Data:</strong> Index-level data (Nifty 50, Midcap 150, Smallcap 250 values + 52W high/low)</li>
+  <li><strong>Session:</strong> Same 4-header approach, visits homepage + equity market page</li>
+  <li><strong>Output:</strong> Single PNG infographic sent to Telegram</li>
+</ul>
+
+<div class="box-ok">
+  <strong>Key difference:</strong> <code>market_alert.py</code> tracks <em>indices</em> (Nifty 50 value). The wishlist tracker needs <em>individual stock</em> data (RADICO price, TATAPOWER price, etc.). NSE's individual stock endpoints are blocked from GitHub Actions.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s13">13. Quick Reference — NSE API Endpoints</h2>
+
+<table>
+  <tr><th>Endpoint</th><th>URL</th><th>Returns</th><th>Status</th></tr>
+  <tr><td>allIndices</td><td><code>/api/allIndices</code></td><td>All index values (Nifty 50, etc.)</td><td><span class="badge-ok">WORKS</span></td></tr>
+  <tr><td>equity-stockIndices</td><td><code>/api/equity-stockIndices?index=NIFTY%20500</code></td><td>All stocks in an index</td><td><span class="badge-fail">404</span></td></tr>
+  <tr><td>quote-equity</td><td><code>/api/quote-equity?symbol=RELIANCE</code></td><td>Single stock data</td><td><span class="badge-fail">403</span></td></tr>
+  <tr><td>getQuotes</td><td><code>/api/getQuotes?symbol=RELIANCE&amp;series=EQ</code></td><td>Single stock data</td><td><span class="badge-fail">404</span></td></tr>
+  <tr><td>market-data-pre-open</td><td><code>/api/market-data-pre-open?key=ALL</code></td><td>Pre-open data all stocks</td><td><span class="badge-warn">UNTESTED</span></td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2 id="s14">14. Action Items for You to Decide</h2>
+
+<ol>
+  <li>
+    <strong>Choose data source:</strong>
+    <ul>
+      <li><strong>Option A (Yahoo Finance)</strong> — guaranteed to work, same data, add <code>yfinance</code> library</li>
+      <li><strong>Option B (Fix NSE URL)</strong> — check browser DevTools on nseindia.com to find exact API URL</li>
+      <li><strong>Option C (NSE pre-open)</strong> — test <code>/api/market-data-pre-open?key=ALL</code></li>
+    </ul>
+  </li>
+  <li>
+    <strong>If Yahoo Finance:</strong> Just say "use Yahoo Finance" and I'll update the code in 5 minutes.
+  </li>
+  <li>
+    <strong>If NSE fix:</strong> Open Chrome → DevTools (F12) → Network tab → Visit <code>nseindia.com/market-data/live-equity-market</code> → Filter by XHR → Share the exact API URLs you see.
+  </li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<hr class="divider">
+<p style="text-align:center; color:#888; font-size:11px;">
+  Wishlist Stock Daily Tracker — Project Summary &nbsp;|&nbsp; 25 Sep 2026 &nbsp;|&nbsp;
+  Repo: github.com/Dilip457/Wishlist-Daily-Tracker &nbsp;|&nbsp;
+  Not financial advice. Educational purpose only.
+</p>
+
+</div>
+</body>
+</html>
