@@ -13,7 +13,7 @@ Every weekday at **6:00 PM IST** (after NSE market close), the tracker:
 1. Fetches live data for all 27 wishlist stocks
 2. Calculates **% below 52-week high** for each stock (the "dip" signal)
 3. Detects if any stock hit a **new 52W high or low** today
-4. Builds **one multi-page PDF report** — dashboard page (KPI tiles, sector snapshot with every sector at once) + sector-wise detail with 52W position bars
+4. Builds **one multi-page PDF report** — page 1 summary (dip-band distribution, data health, new 52W flags) + sector-wise tables, with each sector's **1-day sector return** shown in its header band
 5. Sends the PDF to your **Telegram group/channel** via `sendDocument` (far easier to read than multiple images)
 
 ---
@@ -60,7 +60,7 @@ The report's caption always shows **Live X/27**, so you know at a glance whether
 
 ### Sector Return
 
-Each sector shows a **sector return** — the equal-weighted average of its member stocks' day change — in the Sector Snapshot table on page 1 and in every sector header band. The Telegram caption also calls out the best and worst sector of the day.
+Each sector shows a **sector return** — the equal-weighted average of its member stocks' day change — in its colored header band on every report page. The Telegram caption also calls out the best and worst sector of the day.
 
 ---
 
@@ -129,11 +129,13 @@ wishlist_tracker.py runs
       │     • New 52W high/low detection
       │
       ├─→ Builds ONE multi-page PDF (reportlab):
-      │     • Page 1: dashboard — KPI tiles + sector
-      │       snapshot (all sectors at once: return,
-      │       avg dip, dip-mix bar) with PDF bookmarks
-      │     • Sector pages: price (₹), day change,
-      │       52W position bar, % from high with label
+      │     • Page 1: summary — live/cached counts,
+      │       dip-band distribution with symbol lists,
+      │       new 52W flags
+      │     • Sector tables: price, day change, 52W
+      │       high/low, % from high with dip label,
+      │       day H/L, flags — each sector band shows
+      │       its 1-day sector return
       │
       └─→ Sends PDF to Telegram (sendDocument)
           (plain-text message as automatic fallback)
