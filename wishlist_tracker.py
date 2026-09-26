@@ -41,9 +41,9 @@ try:
     from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import (KeepTogether, PageBreak, Paragraph,
-                                    SimpleDocTemplate, Spacer, Table,
-                                    TableStyle)
+    from reportlab.platypus import (Flowable, KeepTogether, PageBreak,
+                                    Paragraph, SimpleDocTemplate, Spacer,
+                                    Table, TableStyle)
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
@@ -156,15 +156,7 @@ WISHLIST_SECTORS: list[dict] = [
         "color":  (56, 189, 248),
         "stocks": [
             {"symbol": "LT",          "name": "L&T"},
-            {"symbol": "BEL",         "name": "BEL"},
             {"symbol": "DATAPATTNS",  "name": "Data Patterns"},
-        ],
-    },
-    {
-        "sector": "DRONE SECTOR",
-        "color":  (74, 222, 128),
-        "stocks": [
-            {"symbol": "BEL",         "name": "BEL"},
         ],
     },
     {
@@ -531,10 +523,21 @@ def dip_label(pct: float) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LAYER 6 — PDF REPORT (single document, easy to read and share)
+# LAYER 6 — PDF REPORT (dashboard + sector snapshot + sector detail)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Light print-friendly palette.
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# Font setup: prefer DejaVu (has the ₹ glyph); fall back to Helvetica + "Rs.".
+F, FB, RUPEE = "Helvetica", "Helvetica-Bold", "Rs."
+try:
+    pdfmetrics.registerFont(TTFont("DVS",  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+    pdfmetrics.registerFont(TTFont("DVSB", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+    F, FB, RUPEE = "DVS", "DVSB", "\u20B9"
+except Exception:
+    pass
+
 PDF_BG_HEADER  = colors.HexColor("#1F2937")
 PDF_BG_ZEBRA  = colors.HexColor("#F1F5F9")
 PDF_TEXT       = colors.HexColor("#111827")
@@ -544,41 +547,8 @@ PDF_YELLOW     = colors.HexColor("#B45309")
 PDF_ORANGE     = colors.HexColor("#EA580C")
 PDF_RED        = colors.HexColor("#DC2626")
 PDF_GOLD       = colors.HexColor("#A16207")
-
-# NOTE: column widths must sum to <= 559 (A4 595.28 - 2x18 margins).
-# Current total: 558.
-COLS = [
-    ("STOCK",        118, TA_LEFT),
-    ("PRICE (Rs.)",   60, TA_RIGHT),
-    ("DAY CHG",       54, TA_RIGHT),
-    ("52W HIGH",      60, TA_RIGHT),
-    ("% FROM HIGH",   80, TA_RIGHT),
-    ("52W LOW",       60, TA_RIGHT),
-    ("DAY H/L",       60, TA_RIGHT),
-    ("FLAG",          66, TA_RIGHT),
-]
-
-_ss = {
-    "title":  ParagraphStyle("t",  fontName="Helvetica-Bold", fontSize=20,
-                             leading=24, spaceAfter=6,
-                             textColor=PDF_TEXT, alignment=TA_CENTER),
-    "sub":    ParagraphStyle("s",  fontName="Helvetica", fontSize=10,
-                             textColor=PDF_TEXT_SUB, alignment=TA_CENTER),
-    "sect":   ParagraphStyle("se", fontName="Helvetica-Bold", fontSize=11,
-                             textColor=colors.white),
-    "cell":   ParagraphStyle("c",  fontName="Helvetica", fontSize=9,
-                             textColor=PDF_TEXT),
-    "cellb":  ParagraphStyle("cb", fontName="Helvetica-Bold", fontSize=9,
-                             textColor=PDF_TEXT),
-    "small":  ParagraphStyle("sm", fontName="Helvetica", fontSize=7,
-                             textColor=PDF_TEXT_SUB),
-    "smallb": ParagraphStyle("smb", fontName="Helvetica-Bold", fontSize=7,
-                             textColor=PDF_TEXT_SUB),
-    "cellr":  ParagraphStyle("cr", fontName="Helvetica", fontSize=9,
-                             textColor=PDF_TEXT, alignment=TA_RIGHT),
-    "cellrb": ParagraphStyle("crb", fontName="Helvetica-Bold", fontSize=9,
-                             textColor=PDF_TEXT, alignment=TA_RIGHT),
-}
+PDF_CARD       = colors.HexColor("#F8FAFC")
+PDF_LINE       = colors.HexColor("#E5E7EB")
 
 
 def _dip_color(pct: float):
@@ -589,228 +559,343 @@ def _dip_color(pct: float):
     return PDF_GREEN
 
 
+def _day_color(pct: float):
+    if pct > 0: return PDF_GREEN
+    if pct < 0: return PDF_RED
+    return PDF_TEXT_SUB
+
+
 def _rgb(t) -> colors.Color:
     return colors.Color(t[0] / 255, t[1] / 255, t[2] / 255)
 
 
-def _summary_section(quotes: dict) -> list:
-    """Data-health + dip distribution + 52W flag summary blocks."""
-    valid  = {s: q for s, q in quotes.items() if validate_stock_data(q)}
-    cached = [s for s, q in valid.items() if q.get("source") == "cache"]
-    failed = [s for s, q in quotes.items() if not validate_stock_data(q)]
-    new_hi = [s for s, q in valid.items() if q.get("new_52w_high")]
-    new_lo = [s for s, q in valid.items() if q.get("new_52w_low")]
-
-    bands = [
-        ("NEAR PEAK  (< 5% from high)", lambda p: abs(p) < 5,   PDF_GREEN),
-        ("MINOR DIP  (5–9%)",          lambda p: 5 <= abs(p) < 10, PDF_YELLOW),
-        ("MEDIUM DIP (10–14%)",        lambda p: 10 <= abs(p) < 15, PDF_ORANGE),
-        ("DEEP DIP   (15–19%)",        lambda p: 15 <= abs(p) < 20, PDF_RED),
-        ("CRASH ZONE (20%+)",          lambda p: abs(p) >= 20, PDF_RED),
-    ]
-
-    rows: list = [["DIP BAND", "#", "STOCKS"]]
-    styles = [
-        ("BACKGROUND", (0, 0), (-1, 0), PDF_BG_HEADER),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
-        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE",   (0, 0), (-1, 0), 8),
-        ("INNERGRID",  (0, 0), (-1, -1), 0.4, colors.white),
-        ("BOX",        (0, 0), (-1, -1), 0.6, PDF_BG_HEADER),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]
-    for i, (label, match, colr) in enumerate(bands):
-        n = sum(1 for q in valid.values() if match(q["pct_from_high"]))
-        syms = ", ".join(sorted(s for s, q in valid.items()
-                                if match(q["pct_from_high"]))) or "—"
-        syms_par = Paragraph(syms, ParagraphStyle(
-            "sy", fontName="Helvetica", fontSize=7.5, textColor=PDF_TEXT))
-        rows.append([label, str(n), syms_par])
-        styles.append(("TEXTCOLOR", (0, i + 1), (0, i + 1), colr))
-        styles.append(("FONTNAME",  (1, i + 1), (1, i + 1), "Helvetica-Bold"))
-        styles.append(("FONTSIZE", (0, i + 1), (-1, i + 1), 7.5))
-
-    health = (f"Live: {len(valid) - len(cached)}/{len(quotes)}"
-              + (f"  •  Cached: {len(cached)}" if cached else "")
-              + (f"  •  Unavailable: {len(failed)}" if failed else ""))
-    out = [Paragraph(health, _ss["sub"]), Spacer(1, 6)]
-
-    if new_hi or new_lo:
-        flags = []
-        if new_hi:
-            flags.append("NEW 52W HIGH: " + ", ".join(sorted(new_hi)))
-        if new_lo:
-            flags.append("NEW 52W LOW: " + ", ".join(sorted(new_lo)))
-        out.append(Paragraph("  |  ".join(flags), ParagraphStyle(
-            "fl", fontName="Helvetica-Bold", fontSize=8.5, alignment=TA_CENTER,
-            textColor=PDF_GOLD if new_hi else PDF_RED)))
-        out.append(Spacer(1, 6))
-
-    tbl = Table(rows, colWidths=[140, 28, 391])
-    tbl.setStyle(TableStyle(styles))
-    out += [tbl, Spacer(1, 14)]
-    return out
+def _tint(t, f=0.88) -> colors.Color:
+    # darkened sector accent for header bands (white text stays readable)
+    return colors.Color(t[0] / 255 * f, t[1] / 255 * f, t[2] / 255 * f)
 
 
-def _sector_section(sec: dict, quotes: dict) -> list:
-    """One sector: colored header band + stock table."""
-    accent = _rgb(sec["color"])
+def sector_metrics(sec: dict, quotes: dict) -> dict | None:
+    """
+    Equal-weighted 'sector index' metrics from the sector's member stocks:
+      n        — number of stocks with valid data
+      avg_day  — sector return: average day % change
+      avg_dip  — average % from 52W high
+    """
+    vals = [quotes[s] for s in (stk["symbol"] for stk in sec["stocks"])
+            if s in quotes and validate_stock_data(quotes[s])]
+    if not vals:
+        return None
+    n = len(vals)
+    return {
+        "n":       n,
+        "avg_day": round(sum(v["p_change"] for v in vals) / n, 2),
+        "avg_dip": round(sum(v["pct_from_high"] for v in vals) / n, 2),
+    }
 
-    head = Table([[sec["sector"],
-                   f"{len(sec['stocks'])} stock"
-                   + ("s" if len(sec["stocks"]) > 1 else "")]],
-                 colWidths=[498, 60])
-    head.setStyle(TableStyle([
-        ("BACKGROUND",  (0, 0), (-1, -1), accent),
-        ("TEXTCOLOR",   (0, 0), (-1, -1), colors.white),
-        ("FONTNAME",    (0, 0), (0, 0), "Helvetica-Bold"),
-        ("FONTSIZE",    (0, 0), (0, 0), 10.5),
-        ("FONTSIZE",    (1, 0), (1, 0), 8),
-        ("ALIGN",       (1, 0), (1, 0), "RIGHT"),
-        ("TOPPADDING",  (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-    ]))
 
-    data = [[Paragraph(c, ParagraphStyle(
-                "h", fontName="Helvetica-Bold", fontSize=7.5,
-                textColor=colors.white)) for c, _, _ in COLS]]
-    row_colors: list[tuple] = []
+class RangeBar(Flowable):
+    """
+    52-week position bar: a track from 52W low to high, filled from the low
+    up to the current price (colored by dip severity), marker dot at the
+    current price, tiny L/H labels underneath.
+    """
+    def __init__(self, low, high, price, width, color=None):
+        super().__init__()
+        self.low, self.high, self.price = low, high, price
+        self.w = width
+        self.color = color or PDF_TEXT_SUB
 
-    for i, stk in enumerate(sec["stocks"]):
-        sym, name, note = stk["symbol"], stk["name"], stk.get("note", "")
-        q = quotes.get(sym, {})
+    def wrap(self, aw, ah):
+        self.height = 16
+        return (self.w, self.height)
 
-        if not validate_stock_data(q):
-            src = q.get("source", "error")
-            label = "CACHED DATA" if src == "cache" else "DATA UNAVAILABLE"
-            colr = PDF_YELLOW if src == "cache" else PDF_RED
-            st = ParagraphStyle("e", fontName="Helvetica-Bold", fontSize=8,
-                                textColor=colr)
-            row = [Paragraph(f"{sym} — {label}", st)] + \
-                  [Paragraph("—", _ss["cellr"]) for _ in COLS[1:]]
-            row_colors.append((i + 1, colr))
-        else:
-            pfh = q["pct_from_high"]
-            dc  = _dip_color(pfh)
-            stock_html = (f'<font name="Helvetica-Bold" size="9">{sym}</font>'
-                         f'<br/><font size="7" color="#6B7280">{name}</font>')
-            if note:
-                ncol = "#DC2626" if note == "EXITING" else "#B45309"
-                stock_html += (f'<br/><font name="Helvetica-Bold" size="6.5" '
-                               f'color="{ncol}">[{note.upper()}]</font>')
+    def draw(self):
+        c = self.canv
+        span = (self.high - self.low) or 1.0
+        frac = max(0.02, min(0.98, (self.price - self.low) / span))
+        c.setFillColor(PDF_LINE)
+        c.roundRect(0, 9, self.w, 6, 3, stroke=0, fill=1)
+        c.setFillColor(self.color)
+        if frac > 0.035:
+            c.roundRect(0, 9, self.w * frac, 6, 3, stroke=0, fill=1)
+        c.setFillColor(PDF_TEXT)
+        c.circle(self.w * frac, 12, 2.6, stroke=0, fill=1)
+        c.setFont(F, 5.5)
+        c.setFillColor(PDF_TEXT_SUB)
+        c.drawString(0, 1, f"L {self.low:,.0f}")
+        c.drawRightString(self.w, 1, f"H {self.high:,.0f}")
 
-            dip_style = ParagraphStyle(
-                "d", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT,
-                textColor=dc)
-            pct_html = (f"{pfh:+.2f}%<br/>"
-                        f'<font name="Helvetica" size="6.5" color="#6B7280">'
-                        f'{dip_label(pfh)}</font>')
 
-            if q.get("source") == "cache":
-                pct_html += ('<br/><font size="6.5" color="#B45309">'
-                             '[CACHED]</font>')
+class DipDistribution(Flowable):
+    """Tiny stacked bar: how the sector's stocks spread across dip bands."""
+    def __init__(self, pcts, width=92, height=8):
+        super().__init__()
+        self.pcts = pcts
+        self.w, self.h = width, height
 
-            pc = q["p_change"]
-            day_style = ParagraphStyle(
-                "g", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT,
-                textColor=PDF_GREEN if pc > 0 else
-                          (PDF_RED if pc < 0 else PDF_TEXT_SUB))
+    def wrap(self, aw, ah):
+        return (self.w, self.h)
 
-            flag = ""
-            if q.get("new_52w_high"):
-                flag = "NEW 52W HIGH"
-            elif q.get("new_52w_low"):
-                flag = "NEW 52W LOW"
+    def draw(self):
+        c = self.canv
+        bands = [PDF_GREEN, PDF_YELLOW, PDF_ORANGE, PDF_RED, PDF_RED]
+        buckets = [0] * 5
+        for p in self.pcts:
+            a = abs(p)
+            i = 0 if a < 5 else 1 if a < 10 else 2 if a < 15 else 3 if a < 20 else 4
+            buckets[i] += 1
+        n = len(self.pcts) or 1
+        x = 0.0
+        for i, cnt in enumerate(buckets):
+            if not cnt:
+                continue
+            w = self.w * cnt / n
+            c.setFillColor(bands[i])
+            c.rect(x, 0, max(w - 0.7, 0.5), self.h, stroke=0, fill=1)
+            x += w
 
-            row = [
-                Paragraph(stock_html, _ss["cell"]),
-                Paragraph(f"{q['last_price']:,.2f}", _ss["cellrb"]),
-                Paragraph(f"{pc:+.2f}%", day_style),
-                Paragraph(f"{q['high_52w']:,.2f}", _ss["cellr"]),
-                Paragraph(pct_html, dip_style),
-                Paragraph(f"{q['low_52w']:,.2f}", _ss["cellr"]),
-                Paragraph(f"H {q['day_high']:,.0f}<br/>L {q['day_low']:,.0f}",
-                          _ss["cellr"]),
-                Paragraph(flag, ParagraphStyle(
-                    "f", fontName="Helvetica-Bold", fontSize=7, alignment=TA_RIGHT,
-                    textColor=PDF_GOLD if q.get("new_52w_high") else
-                              (PDF_RED if q.get("new_52w_low") else PDF_TEXT_SUB))),
-            ]
-            row_colors.append((i + 1, _dip_color(pfh)))
 
-        data.append(row)
+class Bookmark(Flowable):
+    """Zero-size flowable that registers a PDF outline (sidebar bookmark)."""
+    def __init__(self, key, title):
+        super().__init__()
+        self.key, self.title = key, title
 
-    tbl = Table(data, colWidths=[w for _, w, _ in COLS], repeatRows=1)
-    style = [
-        ("BACKGROUND",    (0, 0), (-1, 0), PDF_BG_HEADER),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.4, colors.HexColor("#E5E7EB")),
-        ("BOX",           (0, 0), (-1, -1), 0.6, colors.HexColor("#9CA3AF")),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 3.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
-        ("LEFTPADDING",  (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
-    ]
-    for r in range(2, len(data), 2):
-        style.append(("BACKGROUND", (0, r), (-1, r), PDF_BG_ZEBRA))
-    # subtle left accent stripe colored by dip severity
-    for row_idx, colr in row_colors:
-        style.append(("LINEBEFORE", (0, row_idx), (0, row_idx), 2.2, colr))
-    tbl.setStyle(TableStyle(style))
+    def wrap(self, aw, ah):
+        return (0, 0)
 
-    return [KeepTogether([head, Spacer(1, 2), tbl]), Spacer(1, 12)]
+    def draw(self):
+        self.canv.bookmarkPage(self.key)
+        self.canv.addOutlineEntry(self.title, self.key, level=0, closed=False)
+
+
+def _p(name, **kw):
+    kw.setdefault("fontName", F)
+    kw.setdefault("fontSize", 9)
+    kw.setdefault("leading", 12)
+    kw.setdefault("textColor", PDF_TEXT)
+    return ParagraphStyle(name, **kw)
 
 
 def build_pdf_report(quotes: dict) -> bytes:
-    """Build the full multi-page PDF report. Returns PDF bytes."""
+    """Build the multi-page PDF report. Returns PDF bytes."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=18, rightMargin=18, topMargin=36, bottomMargin=34,
+        leftMargin=20, rightMargin=20, topMargin=36, bottomMargin=34,
         title="Wishlist Stock Tracker",
         author="Wishlist Daily Tracker",
     )
     now = datetime.now(IST)
     date_str = now.strftime("%d %b %Y  |  %I:%M %p IST")
+    USABLE = A4[0] - 40   # 555.28 — every table below sums to <= this
 
-    def _footer(canvas, _doc):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(PDF_TEXT_SUB)
-        canvas.drawString(18, 22, "Data via Yahoo Finance (NSE). "
-                                  "Not financial advice. Educational only.")
-        canvas.drawRightString(A4[0] - 18, 22, f"Page {canvas.getPageNumber()}")
-        canvas.restoreState()
+    valid  = {s: q for s, q in quotes.items() if validate_stock_data(q)}
+    ranked = sorted(valid, key=lambda s: valid[s]["pct_from_high"])
+    deep   = [s for s in valid if abs(valid[s]["pct_from_high"]) >= 10]
+    new_hi = [s for s in valid if valid[s].get("new_52w_high")]
 
-    def _top_header(canvas, _doc):
-        # Running header on continuation pages only (page 1 has the title).
-        if canvas.getPageNumber() == 1:
+    def _footer(canv, _doc):
+        canv.saveState()
+        canv.setFont(F, 7)
+        canv.setFillColor(PDF_TEXT_SUB)
+        canv.drawString(20, 20, "Wishlist Stock Tracker \u2014 data via Yahoo Finance (NSE). "
+                                "Not financial advice.")
+        canv.drawRightString(A4[0] - 20, 20, f"Page {canv.getPageNumber()}")
+        canv.restoreState()
+
+    def _top_header(canv, _doc):
+        if canv.getPageNumber() == 1:
             return
-        canvas.saveState()
-        canvas.setFont("Helvetica-Bold", 7)
-        canvas.setFillColor(PDF_TEXT_SUB)
-        canvas.drawCentredString(A4[0] / 2, A4[1] - 16,
-                                  f"Wishlist Stock Tracker — {date_str}")
-        canvas.restoreState()
+        canv.saveState()
+        canv.setFont(FB, 7)
+        canv.setFillColor(PDF_TEXT_SUB)
+        canv.drawCentredString(A4[0] / 2, A4[1] - 16,
+                               f"Wishlist Stock Tracker \u2014 {date_str}")
+        canv.restoreState()
 
-    def _page_decor(canvas, doc_):
-        _top_header(canvas, doc_)
-        _footer(canvas, doc_)
+    def _page(canv, d):
+        _top_header(canv, d)
+        _footer(canv, d)
 
-    story = [
-        Paragraph("WISHLIST STOCK TRACKER", _ss["title"]),
-        Paragraph(f"Sector-wise 52W High/Low analysis  •  Daily dip monitor  "
-                   f"•  {date_str}", _ss["sub"]),
-        Spacer(1, 12),
+    story: list = [
+        Paragraph("WISHLIST STOCK TRACKER",
+                  _p("t", fontName=FB, fontSize=19, leading=23, alignment=TA_CENTER)),
+        Paragraph(f"Daily dip monitor \u2022 {date_str} \u2022 "
+                  f"Live {len(valid)}/{len(quotes)}",
+                  _p("sub", fontSize=9.5, leading=12, alignment=TA_CENTER,
+                     textColor=PDF_TEXT_SUB)),
+        Spacer(1, 14),
+        Bookmark("summary", "Summary & Sector Snapshot"),
     ]
-    story += _summary_section(quotes)
-    story.append(PageBreak())
-    for sec in WISHLIST_SECTORS:
-        story += _sector_section(sec, quotes)
 
-    doc.build(story, onFirstPage=_page_decor, onLaterPages=_page_decor)
+    # ── KPI tiles ────────────────────────────────────────────────────────────
+    def tile(value, label, colr=PDF_TEXT):
+        return [Paragraph(value, _p("tv", fontName=FB, fontSize=12.5,
+                                    leading=15, textColor=colr,
+                                    alignment=TA_CENTER)),
+                Spacer(1, 2),
+                Paragraph(label, _p("tl", fontSize=6.5, leading=8,
+                                    textColor=PDF_TEXT_SUB, alignment=TA_CENTER))]
+
+    tw = [130, 8, 130, 8, 130, 8, 130]        # 544
+    tiles = Table([
+        tile(f"{ranked[0]}<br/>{valid[ranked[0]]['pct_from_high']:+.1f}%",
+             "DEEPEST DIP", _dip_color(valid[ranked[0]]["pct_from_high"])),
+        "",
+        tile((", ".join(new_hi)[:24] + "\u2026") if new_hi else "\u2014",
+             "NEW 52W HIGH", PDF_GOLD),
+        "",
+        tile(str(len(deep)), "IN DIP ZONE (10%+ BELOW HIGH)", PDF_ORANGE),
+        "",
+        tile(f"{len(valid)}/{len(quotes)}", "LIVE DATA", PDF_GREEN),
+    ]], colWidths=tw)
+    for c in (0, 2, 4, 6):
+        tiles.setStyle(TableStyle([
+            ("BACKGROUND", (c, 0), (c, 0), PDF_CARD),
+            ("BOX", (c, 0), (c, 0), 0.6, PDF_LINE),
+        ]))
+    tiles.setStyle(TableStyle([
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story += [tiles, Spacer(1, 16)]
+
+    # ── Sector snapshot: every sector at once ────────────────────────────────
+    story.append(Paragraph("SECTOR SNAPSHOT \u2014 ALL SECTORS AT A GLANCE",
+                           _p("sh", fontName=FB, fontSize=10.5, leading=13,
+                              textColor=PDF_BG_HEADER)))
+    story.append(Spacer(1, 5))
+
+    def snap_header(txt, align=TA_RIGHT):
+        return Paragraph(txt, _p("hh", fontName=FB, fontSize=7, leading=9,
+                                 textColor=colors.white, alignment=align))
+
+    snap_rows = [[snap_header("SECTOR", TA_LEFT), snap_header("#"),
+                  snap_header("SECTOR RETURN"), snap_header("AVG % FROM HIGH"),
+                  snap_header("DIP MIX")]]
+    snap_styles = [
+        ("BACKGROUND", (0, 0), (-1, 0), PDF_BG_HEADER),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.4, PDF_LINE),
+        ("BOX", (0, 0), (-1, -1), 0.6, PDF_BG_HEADER),
+    ]
+    for i, sec in enumerate(WISHLIST_SECTORS):
+        m = sector_metrics(sec, quotes)
+        pcts = [quotes[s]["pct_from_high"]
+                for s in (stk["symbol"] for stk in sec["stocks"])
+                if s in quotes and validate_stock_data(quotes[s])]
+        day_col = _day_color(m["avg_day"] if m else 0)
+        snap_rows.append([
+            Paragraph(sec["sector"], _p(f"sn{i}", fontName=FB, fontSize=8.5,
+                         leading=10, textColor=_rgb(sec["color"]))),
+            Paragraph(str(m["n"]) if m else "0",
+                      _p(f"sc{i}", fontSize=8.5, alignment=TA_CENTER,
+                         textColor=PDF_TEXT_SUB)),
+            Paragraph(f"{m['avg_day']:+.2f}%" if m else "\u2014",
+                      _p(f"sr{i}", fontName=FB, fontSize=9, alignment=TA_RIGHT,
+                         textColor=day_col)),
+            Paragraph(f"{m['avg_dip']:+.1f}%" if m else "\u2014",
+                      _p(f"sd{i}", fontSize=9, alignment=TA_RIGHT,
+                         textColor=_dip_color(m["avg_dip"] if m else 0))),
+            DipDistribution(pcts),
+        ])
+    snap = Table(snap_rows, colWidths=[218, 30, 84, 100, 123])   # 555
+    snap.setStyle(TableStyle(snap_styles))
+    story += [snap, Spacer(1, 5),
+              Paragraph("Sector return = equal-weighted average of the sector's stocks. "
+                         "Dip mix: "
+                         "<font color='#15803D'>\u25A0</font> near peak "
+                         "<font color='#B45309'>\u25A0</font> minor "
+                         "<font color='#EA580C'>\u25A0</font> medium "
+                         "<font color='#DC2626'>\u25A0</font> deep/crash",
+                         _p("lg", fontSize=6.5, leading=8,
+                            textColor=PDF_TEXT_SUB)),
+              PageBreak()]
+
+    # ── Sector detail pages ──────────────────────────────────────────────────
+    for sec in WISHLIST_SECTORS:
+        m = sector_metrics(sec, quotes)
+        key = "sec-" + sec["sector"].lower().replace(" ", "-").replace("&", "and")
+        day_txt = f"1D RETURN {m['avg_day']:+.2f}%" if m else ""
+        band = Table([[Paragraph(sec["sector"], _p("bn", fontName=FB,
+                                    fontSize=11, leading=13,
+                                    textColor=colors.white)),
+                       Paragraph(f"{len(sec['stocks'])} stock"
+                                 + ("s" if len(sec["stocks"]) > 1 else "")
+                                 + ("   |   " + day_txt if day_txt else ""),
+                                 _p("bc", fontSize=8, leading=10,
+                                    textColor=colors.white,
+                                    alignment=TA_RIGHT))]],
+                     colWidths=[330, 225])          # 555
+        band.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), _tint(sec["color"])),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 9),
+        ]))
+
+        def col_hdr(txt, align=TA_LEFT):
+            return Paragraph(txt, _p("ch", fontName=FB, fontSize=6.8,
+                                     leading=8, textColor=PDF_TEXT_SUB,
+                                     alignment=align))
+
+        rows = [[col_hdr("STOCK"), col_hdr("PRICE", TA_RIGHT),
+                 col_hdr("DAY CHG", TA_RIGHT), col_hdr("52W POSITION"),
+                 col_hdr("% FROM HIGH", TA_RIGHT)]]
+        for stk in sec["stocks"]:
+            s = stk["symbol"]
+            q = quotes.get(s, {})
+            if not validate_stock_data(q):
+                src = q.get("source", "error")
+                label = "CACHED DATA" if src == "cache" else "DATA UNAVAILABLE"
+                colr = PDF_YELLOW if src == "cache" else PDF_RED
+                rows.append([Paragraph(f"{s} \u2014 {label}",
+                                      _p("er", fontName=FB, fontSize=8.5,
+                                         textColor=colr))] +
+                            [Paragraph("\u2014", _p("ed", alignment=TA_RIGHT))
+                             for _ in range(4)])
+                continue
+            pfh = q["pct_from_high"]
+            note = stk.get("note", "")
+            sym_html = (f'<font name="{FB}" size="10.5">{s}</font>'
+                        f'<br/><font size="7" color="#6B7280">{stk["name"]}')
+            if note:
+                ncol = "#DC2626" if note == "EXITING" else "#B45309"
+                sym_html += (f' &nbsp;<font name="{FB}" size="6.5" '
+                             f'color="{ncol}">[{note.upper()}]</font>')
+            sym_html += "</font>"
+            rows.append([
+                Paragraph(sym_html, _p("sy", leading=12)),
+                Paragraph(f"{RUPEE}{q['last_price']:,.2f}",
+                          _p("pr", fontName=FB, fontSize=10.5, leading=12,
+                             alignment=TA_RIGHT)),
+                Paragraph(f"{q['p_change']:+.2f}%",
+                          _p("dc", fontName=FB, fontSize=9, leading=11,
+                             alignment=TA_RIGHT, textColor=_day_color(q["p_change"]))),
+                RangeBar(q["low_52w"], q["high_52w"], q["last_price"], 165,
+                         color=_dip_color(pfh)),
+                Paragraph(f"{pfh:+.2f}%<br/>"
+                          f'<font name="{F}" size="6.5" color="#6B7280">'
+                          f'{dip_label(pfh)}</font>',
+                          _p("dp", fontName=FB, fontSize=10.5, leading=12,
+                             alignment=TA_RIGHT, textColor=_dip_color(pfh))),
+            ])
+
+        tbl = Table(rows, colWidths=[155, 90, 60, 170, 80])   # 555
+        tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.4, PDF_LINE),
+        ]))
+        story += [Bookmark(key, sec["sector"]),
+                  KeepTogether([band, Spacer(1, 3), tbl]), Spacer(1, 13)]
+
+    doc.build(story, onFirstPage=_page, onLaterPages=_page)
     buf.seek(0)
     return buf.read()
 
@@ -822,15 +907,29 @@ def build_caption(quotes: dict) -> str:
     new_hi = [s for s, q in valid.items() if q.get("new_52w_high")]
     new_lo = [s for s, q in valid.items() if q.get("new_52w_low")]
 
+    # best / worst sector by equal-weighted return
+    sec_rets = []
+    for sec in WISHLIST_SECTORS:
+        m = sector_metrics(sec, quotes)
+        if m:
+            sec_rets.append((sec["sector"].title(), m["avg_day"]))
+    sec_line = ""
+    if len(sec_rets) >= 2:
+        best = max(sec_rets, key=lambda x: x[1])
+        worst = min(sec_rets, key=lambda x: x[1])
+        sec_line = (f"\n\U0001F4C8 Best sector: {best[0]} {best[1]:+.2f}%"
+                    f"  \u2022  Worst: {worst[0]} {worst[1]:+.2f}%")
+
     now = datetime.now(IST)
-    cap = (f"<b>Wishlist Stock Tracker — {now.strftime('%a, %d %b %Y')}</b>\n"
+    cap = (f"<b>Wishlist Stock Tracker \u2014 {now.strftime('%a, %d %b %Y')}</b>\n"
            f"Live {len(valid)}/{len(quotes)}"
-           + (f" • {failed} unavailable" if failed else "")
-           + f" • {deep} in dip zone (10%+ below 52W high)")
+           + (f" \u2022 {failed} unavailable" if failed else "")
+           + f" \u2022 {deep} in dip zone (10%+ below 52W high)"
+           + sec_line)
     if new_hi:
-        cap += f"\n🔥 New 52W high: {', '.join(sorted(new_hi))}"
+        cap += f"\n\U0001F525 New 52W high: {', '.join(sorted(new_hi))}"
     if new_lo:
-        cap += f"\n🧊 New 52W low: {', '.join(sorted(new_lo))}"
+        cap += f"\n\U0001F9CA New 52W low: {', '.join(sorted(new_lo))}"
     return cap
 
 
