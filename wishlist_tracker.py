@@ -51,9 +51,9 @@ except ImportError:
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # STOCK CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 WISHLIST_SECTORS: list[dict] = [
     {
@@ -199,9 +199,9 @@ WISHLIST_SECTORS: list[dict] = [
     },
 ]
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 1 — DATA PROVIDERS (primary + fallback + cache)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 class MarketDataProvider(ABC):
     """Abstract base class for market data providers."""
@@ -377,9 +377,9 @@ class YahooChartAPIProvider(MarketDataProvider):
         return _empty_stock_data(symbol, last_err)
 
 
-# ═════════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 2 — VALIDATION
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def validate_stock_data(data: dict) -> bool:
     """True only if the data is usable (no error, sane ranges)."""
@@ -396,9 +396,9 @@ def validate_stock_data(data: dict) -> bool:
     return True
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 3 — CACHE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 _CACHE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "cache.json"
@@ -446,9 +446,9 @@ def update_cache(cache: dict, quotes: dict[str, dict]) -> dict:
     return cache
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 4 — DATA FETCH ORCHESTRATION (primary -> fallback -> cache)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def fetch_all_quotes(symbols: list[str], cache: dict) -> dict[str, dict]:
     """
@@ -469,7 +469,7 @@ def fetch_all_quotes(symbols: list[str], cache: dict) -> dict[str, dict]:
                 break
             quotes[sym] = data   # keep last error; next provider may fix it
 
-    # ── Extra retry round for anything that failed every provider ──────────
+    # ─── Extra retry round for anything that failed every provider ──────
     retry_syms = [s for s in symbols if not validate_stock_data(quotes[s])]
     if retry_syms:
         print(f"  Retrying {len(retry_syms)} failed symbol(s) after pause: "
@@ -482,16 +482,16 @@ def fetch_all_quotes(symbols: list[str], cache: dict) -> dict[str, dict]:
                     quotes[sym] = data
                     break
 
-    # ── Final fallback: cache ────────────────────────────────────────────────
+    # ─── Final fallback: cache ──────
     for sym in symbols:
         quotes[sym] = resolve_with_cache(sym, quotes[sym], cache)
 
     return quotes
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 5 — OPPORTUNITY SCORING ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def score_opportunity(data: dict) -> dict:
     """Enrich a StockData dict with % from 52W high/low and new-52W flags."""
@@ -522,9 +522,9 @@ def dip_label(pct: float) -> str:
     return "NEAR PEAK"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 6 — PDF REPORT (dashboard + sector snapshot + sector detail)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -729,7 +729,7 @@ def build_pdf_report(quotes: dict) -> bytes:
         Bookmark("summary", "Summary & Sector Snapshot"),
     ]
 
-    # ── KPI tiles ────────────────────────────────────────────────────────────
+    # ─── KPI tiles ──────
     def tile(value, label, colr=PDF_TEXT):
         return [Paragraph(value, _p("tv", fontName=FB, fontSize=12.5,
                                     leading=15, textColor=colr,
@@ -739,7 +739,7 @@ def build_pdf_report(quotes: dict) -> bytes:
                                     textColor=PDF_TEXT_SUB, alignment=TA_CENTER))]
 
     tw = [130, 8, 130, 8, 130, 8, 130]        # 544
-    tiles = Table([
+    tile_row = [
         tile(f"{ranked[0]}<br/>{valid[ranked[0]]['pct_from_high']:+.1f}%",
              "DEEPEST DIP", _dip_color(valid[ranked[0]]["pct_from_high"])),
         "",
@@ -749,7 +749,8 @@ def build_pdf_report(quotes: dict) -> bytes:
         tile(str(len(deep)), "IN DIP ZONE (10%+ BELOW HIGH)", PDF_ORANGE),
         "",
         tile(f"{len(valid)}/{len(quotes)}", "LIVE DATA", PDF_GREEN),
-    ]], colWidths=tw)
+    ]
+    tiles = Table([tile_row], colWidths=tw)
     for c in (0, 2, 4, 6):
         tiles.setStyle(TableStyle([
             ("BACKGROUND", (c, 0), (c, 0), PDF_CARD),
@@ -762,7 +763,7 @@ def build_pdf_report(quotes: dict) -> bytes:
     ]))
     story += [tiles, Spacer(1, 16)]
 
-    # ── Sector snapshot: every sector at once ────────────────────────────────
+    # ─── Sector snapshot: every sector at once ──────
     story.append(Paragraph("SECTOR SNAPSHOT \u2014 ALL SECTORS AT A GLANCE",
                            _p("sh", fontName=FB, fontSize=10.5, leading=13,
                               textColor=PDF_BG_HEADER)))
@@ -816,7 +817,7 @@ def build_pdf_report(quotes: dict) -> bytes:
                             textColor=PDF_TEXT_SUB)),
               PageBreak()]
 
-    # ── Sector detail pages ──────────────────────────────────────────────────
+    # ─── Sector detail pages ──────
     for sec in WISHLIST_SECTORS:
         m = sector_metrics(sec, quotes)
         key = "sec-" + sec["sector"].lower().replace(" ", "-").replace("&", "and")
@@ -969,9 +970,9 @@ def build_text_message(quotes: dict) -> str:
     return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # LAYER 7 — TELEGRAM DELIVERY
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def _send_document(bot_token: str, chat_id: str,
                    pdf_bytes: bytes, caption: str, filename: str) -> bool:
@@ -1019,9 +1020,9 @@ def notify_all(bot_token: str, chat_ids_str: str,
         time.sleep(2)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def get_unique_symbols() -> list[str]:
     """Deduplicated list of all NSE symbols across all sectors."""
@@ -1032,9 +1033,9 @@ def get_unique_symbols() -> list[str]:
     return list(seen.keys())
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 # MAIN ORCHESTRATOR
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════
 
 def main() -> None:
     now = datetime.now(IST)
@@ -1059,19 +1060,19 @@ def main() -> None:
     print(f"Tracking {len(symbols)} unique symbols across "
           f"{len(WISHLIST_SECTORS)} sectors.\n")
 
-    # ── Step 1: Load cache ────────────────────────────────────────────────────
+    # ─── Step 1: Load cache ──────
     print("Step 1: Loading cache...")
     cache = load_cache()
     print(f"  Cache loaded: {len(cache.get('stocks', {}))} entries "
           f"(last updated: {cache.get('last_updated', 'never')})")
 
-    # ── Step 2: Fetch live data (primary + fallback providers) ────────────────
+    # ─── Step 2: Fetch live data (primary + fallback providers) ──────
     print("Step 2: Fetching live data...")
     raw = fetch_all_quotes(symbols, cache)
     live_ok = sum(1 for d in raw.values() if validate_stock_data(d))
     print(f"  Fetch complete: {live_ok}/{len(symbols)} symbols OK\n")
 
-    # ── Step 3: Score ─────────────────────────────────────────────────────────
+    # ─── Step 3: Score ──────
     print("Step 3: Scoring opportunities...")
     quotes = {sym: score_opportunity(d) for sym, d in raw.items()}
     for sym in symbols:
@@ -1081,12 +1082,12 @@ def main() -> None:
                   else f"FAIL ({q.get('error', '?')})")
         print(f"  {sym:<14} {status}")
 
-    # ── Step 4: Update and save cache ─────────────────────────────────────────
+    # ─── Step 4: Update and save cache ──────
     print("\nStep 4: Updating cache...")
     cache = update_cache(cache, quotes)
     save_cache(cache)
 
-    # ── Step 5: Build PDF report ──────────────────────────────────────────────
+    # ─── Step 5: Build PDF report ──────
     pdf_bytes: bytes | None = None
     filename = f"wishlist_tracker_{now.strftime('%d%b%Y')}.pdf"
     if REPORTLAB_AVAILABLE:
@@ -1099,11 +1100,11 @@ def main() -> None:
     else:
         print("\nStep 5: reportlab unavailable — skipping PDF.")
 
-    # ── Step 6: Build text fallback ───────────────────────────────────────────
+    # ─── Step 6: Build text fallback ──────
     text_msg = build_text_message(quotes)
     caption  = build_caption(quotes)
 
-    # ── Step 7: Send to Telegram ──────────────────────────────────────────────
+    # ─── Step 7: Send to Telegram ──────
     print("\nStep 6: Sending to Telegram...")
     notify_all(bot_token, chat_ids_str, pdf_bytes, filename, caption, text_msg)
     print("\nDone!")
