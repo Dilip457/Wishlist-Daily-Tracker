@@ -13,7 +13,7 @@ Every weekday at **6:00 PM IST** (after NSE market close), the tracker:
 1. Fetches live data for all 27 wishlist stocks
 2. Calculates **% below 52-week high** for each stock (the "dip" signal)
 3. Detects if any stock hit a **new 52W high or low** today
-4. Builds **one multi-page PDF report** — summary page (dip distribution, data health, new 52W flags) + sector-wise tables with color-coded dip signals
+4. Builds **one multi-page PDF report** — dashboard page (KPI tiles, sector snapshot with every sector at once) + sector-wise detail with 52W position bars
 5. Sends the PDF to your **Telegram group/channel** via `sendDocument` (far easier to read than multiple images)
 
 ---
@@ -49,15 +49,18 @@ The report's caption always shows **Live X/27**, so you know at a glance whether
 | IT SECTOR | PERSISTENT |
 | AUTO ANCILLARY SECTOR | UNOMINDA, SONACOMS |
 | SEMICONDUCTOR SECTOR | MOSCHIP *(highly valued)* |
-| SPACE SECTOR | LT, BEL, DATAPATTNS |
-| DRONE SECTOR | BEL |
+| SPACE SECTOR | LT, DATAPATTNS |
 | DATA CENTER SECTOR | ANANTRAJ, NETWEB |
 | BANKING SECTOR | SBIN, INDIANB |
 | DEFENCE SECTOR | BEL |
 | HOSPITAL SECTOR | APOLLOHOSP, FORTIS |
 | CONSUMER DURABLES | BLUESTARCO |
 
-> Note: BEL appears in SPACE, DRONE, and DEFENCE sectors intentionally — it plays across all three themes.
+> Note: every stock belongs to exactly ONE sector so the report stays unambiguous — BEL (defence electronics, with space/drone exposure) is classified under DEFENCE only.
+
+### Sector Return
+
+Each sector shows a **sector return** — the equal-weighted average of its member stocks' day change — in the Sector Snapshot table on page 1 and in every sector header band. The Telegram caption also calls out the best and worst sector of the day.
 
 ---
 
@@ -126,10 +129,11 @@ wishlist_tracker.py runs
       │     • New 52W high/low detection
       │
       ├─→ Builds ONE multi-page PDF (reportlab):
-      │     • Page 1: summary — live/cached counts, dip
-      │       distribution with symbol lists, new 52W flags
-      │     • Sector tables: price, day change, 52W range,
-      │       % from high with dip label, day H/L, flags
+      │     • Page 1: dashboard — KPI tiles + sector
+      │       snapshot (all sectors at once: return,
+      │       avg dip, dip-mix bar) with PDF bookmarks
+      │     • Sector pages: price (₹), day change,
+      │       52W position bar, % from high with label
       │
       └─→ Sends PDF to Telegram (sendDocument)
           (plain-text message as automatic fallback)
