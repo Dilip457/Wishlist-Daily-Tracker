@@ -1,1 +1,2 @@
-hello
+line with em-dash — and bullet • and rupee ₹ and emoji 📈
+plus ═══ banners and ─── dashes
